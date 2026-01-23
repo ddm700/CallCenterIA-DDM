@@ -1,0 +1,5 @@
+{
+  "name": "Callcenter IA - DDM",
+  "description": "Dashboard for managing VAPI automated calling campaigns, contacts, and performance analytics.",
+  "requestFramePermissions": []
+}
