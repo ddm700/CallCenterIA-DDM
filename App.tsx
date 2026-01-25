@@ -61,8 +61,7 @@ const TopBar = () => {
               <Phone className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-tight leading-none mb-0.5">Callcenter IA</h1>
-              <p className="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">Data Driven Performance</p>
+              <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight leading-none">Callcenter IA - DDM</h1>
             </div>
           </div>
           <div className="hidden md:flex items-center gap-2 ml-4">

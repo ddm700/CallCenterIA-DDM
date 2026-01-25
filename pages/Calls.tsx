@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Badge, Input } from '../components/ui';
-import { Search, Play, ExternalLink, XCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { Search, Play, ExternalLink, XCircle, RefreshCw, Loader2, Phone, Activity, UserCheck, Voicemail } from 'lucide-react';
 import { Call } from '../types';
 import { supabaseService } from '../services/supabaseService';
 import { CallDetailsModal } from '../components/CallDetailsModal';
@@ -63,6 +63,29 @@ export const Calls: React.FC = () => {
     return matchCampaign && matchClient && matchStatus && matchDate;
   });
 
+  // --- KPIs Calculation ---
+  const kpiTotalToday = calls.filter(c => {
+    const today = new Date().toLocaleDateString('pt-BR');
+    return c.date.startsWith(today);
+  }).length;
+
+  const kpiActive = calls.filter(c => c.status === 'Em andamento').length;
+
+  // Taxa de Alô (Answered Rate): Consideramos atendidas as que foram 'Concluída' e NÃO foram caixa postal
+  // Heurística simples para caixa postal baseada no 'reason'
+  const isVoicemail = (reason: string) => {
+    const r = reason.toLowerCase();
+    return r.includes('voicemail') || r.includes('answering') || r.includes('machine') || r.includes('caixa') || r.includes('postal');
+  };
+
+  const completedCalls = calls.filter(c => c.status === 'Concluída' || c.status === 'completed');
+  const answeredCalls = completedCalls.filter(c => !isVoicemail(c.reason));
+  const voicemailCalls = calls.filter(c => isVoicemail(c.reason));
+
+  const kpiAnsweredRate = calls.length > 0 ? Math.round((answeredCalls.length / calls.length) * 100) : 0;
+  const kpiVoicemailRate = calls.length > 0 ? Math.round((voicemailCalls.length / calls.length) * 100) : 0;
+
+
   const handleOpenDetails = (call: Call) => {
     setSelectedCall(call);
     setIsModalOpen(true);
@@ -70,8 +93,72 @@ export const Calls: React.FC = () => {
 
   return (
     <div className="space-y-6">
+
+      {/* Live Operations Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in">
+        {/* Total Hoje */}
+        <Card className="bg-surface dark:bg-dark-surface border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between border-l-4 border-l-primary shadow-sm hover:shadow-md transition-all">
+          <div>
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Chamadas Hoje</p>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-mono font-bold text-slate-900 dark:text-white">{kpiTotalToday}</span>
+              <span className="text-[10px] text-slate-400">vol. diário</span>
+            </div>
+          </div>
+          <div className="p-2.5 bg-orange-50 dark:bg-orange-900/10 rounded-lg">
+            <Phone className="w-5 h-5 text-primary" />
+          </div>
+        </Card>
+
+        {/* Em Curso - Pulsing */}
+        <Card className="bg-surface dark:bg-dark-surface border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between border-l-4 border-l-blue-500 shadow-sm hover:shadow-md transition-all relative overflow-hidden">
+          {kpiActive > 0 && <span className="absolute top-0 right-0 w-2 h-2 bg-blue-500 rounded-full animate-ping m-2"></span>}
+          <div>
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-2">
+              Em Curso
+              {kpiActive > 0 && <span className="flex w-2 h-2 bg-blue-500 rounded-full"></span>}
+            </p>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-mono font-bold text-slate-900 dark:text-white">{kpiActive}</span>
+              <span className="text-[10px] text-slate-400">agora</span>
+            </div>
+          </div>
+          <div className="p-2.5 bg-blue-50 dark:bg-blue-900/10 rounded-lg">
+            <Activity className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+          </div>
+        </Card>
+
+        {/* Taxa de Alô (Conectividade) */}
+        <Card className="bg-surface dark:bg-dark-surface border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between border-l-4 border-l-emerald-500 shadow-sm hover:shadow-md transition-all">
+          <div>
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Taxa de Alô</p>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-mono font-bold text-slate-900 dark:text-white">{kpiAnsweredRate}%</span>
+              <span className="text-[10px] text-emerald-500 font-medium">humano</span>
+            </div>
+          </div>
+          <div className="p-2.5 bg-emerald-50 dark:bg-emerald-900/10 rounded-lg">
+            <UserCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+          </div>
+        </Card>
+
+        {/* Taxa de Caixa Postal */}
+        <Card className="bg-surface dark:bg-dark-surface border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between border-l-4 border-l-purple-500 shadow-sm hover:shadow-md transition-all">
+          <div>
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Caixa Postal</p>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-mono font-bold text-slate-900 dark:text-white">{kpiVoicemailRate}%</span>
+              <span className="text-[10px] text-slate-400">máquina</span>
+            </div>
+          </div>
+          <div className="p-2.5 bg-purple-50 dark:bg-purple-900/10 rounded-lg">
+            <Voicemail className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+          </div>
+        </Card>
+      </div>
+
       {/* Filters - Tech Control Panel */}
-      <div className="bg-surface dark:bg-dark-surface p-5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm animate-fade-in">
+      <div className="bg-surface dark:bg-dark-surface p-5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm animate-slide-up">
         <h2 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
           <Search className="w-4 h-4" /> Filtros Avançados
         </h2>
