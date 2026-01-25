@@ -183,7 +183,7 @@ export const Calls: React.FC = () => {
                     </td>
                     <td className="px-5 py-3.5 font-mono text-xs text-right text-slate-700 dark:text-slate-300">R$ {call.cost.toFixed(2)}</td>
                     <td className="px-5 py-3.5 text-right last:pr-6">
-                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center justify-end gap-1">
                         {call.recordingUrl && (
                           <button
                             className="p-1.5 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-md text-orange-600 dark:text-orange-400 transition-colors btn-click"
