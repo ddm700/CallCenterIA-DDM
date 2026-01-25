@@ -194,121 +194,152 @@ export const Campaigns: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in">
+        <div className="bg-surface dark:bg-dark-surface p-6 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-500 dark:text-slate-400 uppercase">Campanhas Ativas</p>
-              <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-2">{activeCampaignsCount}</h3>
-              <p className="text-xs text-slate-400 mt-1">em execução</p>
+              <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Campanhas Ativas</p>
+              <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-1 font-mono tracking-tight">{activeCampaignsCount}</h3>
+              <p className="text-xs text-slate-400">em execução</p>
             </div>
-            <div className="h-12 w-12 bg-orange-100 dark:bg-orange-900/30 rounded-lg flex items-center justify-center text-primary">
-              <Phone className="w-6 h-6" />
+            <div className="h-10 w-10 bg-orange-50 dark:bg-orange-900/20 rounded-md border border-orange-100 dark:border-orange-900/30 flex items-center justify-center text-primary">
+              <Phone className="w-5 h-5" />
             </div>
           </div>
-        </Card>
-        <Card className="p-6">
+        </div>
+        <div className="bg-surface dark:bg-dark-surface p-6 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-500 dark:text-slate-400 uppercase">Total de Contatos</p>
-              <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-2">{totalContacts}</h3>
-              <p className="text-xs text-slate-400 mt-1">em todas as campanhas</p>
+              <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Total de Contatos</p>
+              <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-1 font-mono tracking-tight">{totalContacts}</h3>
+              <p className="text-xs text-slate-400">em todas as campanhas</p>
             </div>
-            <div className="h-12 w-12 bg-slate-100 dark:bg-slate-700 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300">
-              <Users className="w-6 h-6" />
+            <div className="h-10 w-10 bg-slate-50 dark:bg-slate-800 rounded-md border border-slate-100 dark:border-slate-700 flex items-center justify-center text-slate-500 dark:text-slate-400">
+              <Users className="w-5 h-5" />
             </div>
           </div>
-        </Card>
-        <Card className="p-6">
+        </div>
+        <div className="bg-surface dark:bg-dark-surface p-6 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-500 dark:text-slate-400 uppercase">Contatos Pendentes</p>
-              <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-2">{pendingContacts}</h3>
-              <p className="text-xs text-slate-400 mt-1">aguardando discagem</p>
+              <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Contatos Pendentes</p>
+              <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-1 font-mono tracking-tight">{pendingContacts}</h3>
+              <p className="text-xs text-slate-400">aguardando discagem</p>
             </div>
-            <div className="h-12 w-12 bg-orange-100 dark:bg-orange-900/30 rounded-lg flex items-center justify-center text-primary">
-              <Clock className="w-6 h-6" />
+            <div className="h-10 w-10 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-100 dark:border-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
+              <Clock className="w-5 h-5" />
             </div>
           </div>
-        </Card>
+        </div>
       </div>
 
       {/* Campaign List */}
-      <Card className="p-6">
-        <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Lista de Campanhas</h2>
-            <button onClick={fetchCampaigns} className="p-1 text-slate-400 hover:text-primary"><RefreshCw className="w-4 h-4" /></button>
+      <div className="bg-surface dark:bg-dark-surface rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm animate-slide-up">
+        <div className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">Campanhas</h2>
+            <button
+              onClick={fetchCampaigns}
+              className="p-1.5 text-slate-400 hover:text-primary hover:bg-orange-50 dark:hover:bg-orange-900/10 rounded-md transition-all btn-click"
+              title="Atualizar lista"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
           </div>
-          <Button icon={Plus} onClick={openCreateModal}>Nova Campanha</Button>
+          <Button icon={Plus} onClick={openCreateModal} size="sm" className="btn-click shadow-sm">Nova Campanha</Button>
         </div>
 
         {loading ? (
-          <div className="p-8 text-center text-slate-500 dark:text-slate-400">Carregando campanhas do banco de dados...</div>
+          <div className="p-12 text-center">
+            <Loader2 className="w-8 h-8 text-primary animate-spin mx-auto mb-3" />
+            <p className="text-sm text-slate-500 dark:text-slate-400">Sincronizando dados...</p>
+          </div>
         ) : campaigns.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-dashed border-slate-300 dark:border-slate-700">
-            Nenhuma campanha encontrada. Crie a primeira!
+          <div className="p-12 text-center text-slate-500 dark:text-slate-400">
+            <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Phone className="w-8 h-8 text-slate-300 dark:text-slate-600" />
+            </div>
+            <h3 className="text-slate-900 dark:text-white font-medium mb-1">Nenhuma campanha criada</h3>
+            <p className="text-sm">Comece criando sua primeira campanha de disparos.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
-              <thead className="bg-slate-50 dark:bg-slate-700 text-xs uppercase font-semibold text-slate-500 dark:text-slate-300">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50/50 dark:bg-slate-800/50 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">
                 <tr>
-                  <th className="px-4 py-3 rounded-tl-lg">Nome</th>
-                  <th className="px-4 py-3">Instituição</th>
-                  <th className="px-4 py-3">Tipo</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3 text-center">Contatos</th>
-                  <th className="px-4 py-3 text-center">Ativo</th>
-                  <th className="px-4 py-3 rounded-tr-lg text-right">Ações</th>
+                  <th className="px-5 py-3 first:pl-6">Campanha</th>
+                  <th className="px-5 py-3">Instituição</th>
+                  <th className="px-5 py-3">Canal</th>
+                  <th className="px-5 py-3">Status</th>
+                  <th className="px-5 py-3 text-center">Volume</th>
+                  <th className="px-5 py-3 text-center">Ativar</th>
+                  <th className="px-5 py-3 text-right last:pr-6">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {campaigns.map((campaign) => (
-                  <tr key={campaign.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                    <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">{campaign.name}</td>
-                    <td className="px-4 py-3">{campaign.institution || '-'}</td>
-                    <td className="px-4 py-3">
-                      <Badge variant="neutral">{campaign.type}</Badge>
+                  <tr key={campaign.id} className="group hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
+                    <td className="px-5 py-3.5 first:pl-6 font-medium text-slate-900 dark:text-white">
+                      {campaign.name}
+                      <div className="text-[10px] font-normal text-slate-400 mt-0.5 font-mono">{campaign.startTime} - {campaign.endTime}</div>
                     </td>
-                    <td className="px-4 py-3">
-                      <Badge variant={campaign.status === 'active' || campaign.status === 'completed' ? 'success' : 'neutral'}>
-                        {campaign.status === 'active' ? 'Executando' : campaign.status === 'completed' ? 'Concluído' : campaign.status === 'draft' ? 'Rascunho' : 'Pausado'}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-center">{campaign.totalContacts || 0}</td>
-                    <td className="px-4 py-3 text-center">
-                      <div
-                        onClick={(e) => toggleCampaign(e, campaign.id, campaign.active)}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full cursor-pointer transition-colors ${campaign.active ? 'bg-primary' : 'bg-slate-300 dark:bg-slate-600'}`}
-                      >
-                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${campaign.active ? 'translate-x-6' : 'translate-x-1'}`} />
+                    <td className="px-5 py-3.5 text-slate-600 dark:text-slate-300">{campaign.institution || '-'}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="inline-flex items-center px-2 py-1 rounded border text-[10px] font-medium bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400">
+                        {campaign.type}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
+                    <td className="px-5 py-3.5">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border ${campaign.status === 'active'
+                        ? 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-900/30'
+                        : campaign.status === 'completed'
+                          ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-900/30'
+                          : campaign.status === 'draft'
+                            ? 'bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
+                            : 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-400 dark:border-yellow-900/30'
+                        }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${campaign.status === 'active' ? 'bg-green-500 animate-pulse' :
+                          campaign.status === 'completed' ? 'bg-blue-500' :
+                            campaign.status === 'draft' ? 'bg-slate-400' : 'bg-yellow-500'
+                          }`}></span>
+                        {campaign.status === 'active' ? 'Executando' : campaign.status === 'completed' ? 'Concluído' : campaign.status === 'draft' ? 'Rascunho' : 'Pausado'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3.5 text-center font-mono text-slate-600 dark:text-slate-400">{campaign.totalContacts || 0}</td>
+                    <td className="px-5 py-3.5 text-center">
+                      <div
+                        onClick={(e) => toggleCampaign(e, campaign.id, campaign.active)}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full cursor-pointer transition-colors shadow-inner ${campaign.active ? 'bg-primary' : 'bg-slate-200 dark:bg-slate-700'}`}
+                        title={campaign.active ? "Desativar campanha" : "Ativar campanha"}
+                      >
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform ${campaign.active ? 'translate-x-4.5' : 'translate-x-1'}`} />
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5 text-right last:pr-6">
+                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           type="button"
                           onClick={(e) => handleExecuteCampaign(e, campaign)}
                           disabled={executingId === campaign.id}
-                          className={`p-1 rounded transition-colors ${executingId === campaign.id ? 'text-slate-400 cursor-not-allowed' : 'hover:bg-green-100 dark:hover:bg-green-900/40 text-green-600 dark:text-green-400'}`}
-                          title="Executar (Disparar Webhook)"
+                          className={`p-1.5 rounded-md transition-colors btn-click ${executingId === campaign.id ? 'text-slate-400 cursor-not-allowed' : 'hover:bg-green-50 dark:hover:bg-green-900/30 text-green-600 dark:text-green-400 border border-transparent hover:border-green-200 dark:hover:border-green-900/50'}`}
+                          title="Forçar Execução Agora"
                         >
-                          {executingId === campaign.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
+                          {executingId === campaign.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
                         </button>
                         <button
                           type="button"
                           onClick={(e) => openEditModal(e, campaign)}
-                          className="p-1 hover:bg-slate-200 dark:hover:bg-slate-600 rounded text-slate-500 dark:text-slate-400 hover:text-primary dark:hover:text-primary"
-                          title="Editar"
+                          className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors btn-click"
+                          title="Configurações"
                         >
-                          <Edit className="w-4 h-4" />
+                          <Edit className="w-3.5 h-3.5" />
                         </button>
                         <button
                           type="button"
-                          className="p-1 hover:bg-slate-200 dark:hover:bg-slate-600 rounded text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400"
+                          className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md text-slate-400 hover:text-red-500 transition-colors btn-click"
+                          title="Excluir"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </td>
@@ -318,7 +349,7 @@ export const Campaigns: React.FC = () => {
             </table>
           </div>
         )}
-      </Card>
+      </div>
 
       {/* Create/Edit Modal */}
       <Modal
