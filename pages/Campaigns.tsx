@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Modal, Input } from '../components/ui';
-import { Play, Pause, Trash2, Edit, Plus, Phone, Users, Clock, RefreshCw, Loader2 } from 'lucide-react';
+import { Play, Pause, Trash2, Edit, Plus, Phone, Users, Clock, RefreshCw, Loader2, TrendingUp } from 'lucide-react';
 import { Campaign, VapiAssistant, VapiPhoneNumber } from '../types';
 import { supabaseService } from '../services/supabaseService';
 import { vapiService } from '../services/vapiService';
@@ -228,6 +228,20 @@ export const Campaigns: React.FC = () => {
             </div>
             <div className="h-10 w-10 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-100 dark:border-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
               <Clock className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+        <div className="bg-surface dark:bg-dark-surface p-6 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition-shadow">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Eficiência Global</p>
+              <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-1 font-mono tracking-tight">
+                {totalContacts > 0 ? Math.round((campaigns.reduce((acc, curr) => acc + (curr.completedContacts || 0), 0) / totalContacts) * 100) : 0}%
+              </h3>
+              <p className="text-xs text-slate-400">taxa de conclusão</p>
+            </div>
+            <div className="h-10 w-10 bg-green-50 dark:bg-green-900/20 rounded-md border border-green-100 dark:border-green-900/30 flex items-center justify-center text-green-600 dark:text-green-400">
+              <TrendingUp className="w-5 h-5" />
             </div>
           </div>
         </div>
