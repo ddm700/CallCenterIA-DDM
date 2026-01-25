@@ -9,6 +9,12 @@ export const Calls: React.FC = () => {
   const [calls, setCalls] = useState<Call[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Filter States
+  const [selectedCampaign, setSelectedCampaign] = useState('Todas as Campanhas');
+  const [selectedClient, setSelectedClient] = useState('Todos os Clientes');
+  const [selectedStatus, setSelectedStatus] = useState('Todos os Status');
+  const [selectedDate, setSelectedDate] = useState('Todas as Datas');
+
   // Modal State
   const [selectedCall, setSelectedCall] = useState<Call | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -29,6 +35,34 @@ export const Calls: React.FC = () => {
     fetchCalls();
   }, []);
 
+  // --- Filtering Logic ---
+
+  // 1. Extract unique options for dropdowns
+  const uniqueCampaigns = ['Todas as Campanhas', ...Array.from(new Set(calls.map(c => c.campaignName))).filter(Boolean).sort()];
+  const uniqueClients = ['Todos os Clientes', ...Array.from(new Set(calls.map(c => c.clientName))).filter(Boolean).sort()];
+  const uniqueStatus = ['Todos os Status', ...Array.from(new Set(calls.map(c => c.status))).filter(Boolean).sort()];
+
+  // Extract Dates (DD/MM/YYYY) from timestamps
+  const uniqueDates = ['Todas as Datas', ...Array.from(new Set(calls.map(c => c.date.split(',')[0].trim()))).filter(Boolean).sort((a: string, b: string) => {
+    // Sort dates descending (newest first)
+    const [da, ma, ya] = a.split('/').map(Number);
+    const [db, mb, yb] = b.split('/').map(Number);
+    return new Date(yb, mb - 1, db).getTime() - new Date(ya, ma - 1, da).getTime();
+  })];
+
+  // 2. Filter data based on selection
+  const filteredCalls = calls.filter(call => {
+    const matchCampaign = selectedCampaign === 'Todas as Campanhas' || call.campaignName === selectedCampaign;
+    const matchClient = selectedClient === 'Todos os Clientes' || call.clientName === selectedClient;
+    const matchStatus = selectedStatus === 'Todos os Status' || call.status === selectedStatus;
+
+    // Date matching
+    const callDate = call.date.split(',')[0].trim();
+    const matchDate = selectedDate === 'Todas as Datas' || callDate === selectedDate;
+
+    return matchCampaign && matchClient && matchStatus && matchDate;
+  });
+
   const handleOpenDetails = (call: Call) => {
     setSelectedCall(call);
     setIsModalOpen(true);
@@ -42,17 +76,36 @@ export const Calls: React.FC = () => {
           <Search className="w-4 h-4" /> Filtros Avançados
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <select className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow">
-            <option>Todas as Campanhas</option>
+          <select
+            value={selectedCampaign}
+            onChange={(e) => setSelectedCampaign(e.target.value)}
+            className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
+          >
+            {uniqueCampaigns.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
-          <select className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow">
-            <option>Todos os Clientes</option>
+
+          <select
+            value={selectedClient}
+            onChange={(e) => setSelectedClient(e.target.value)}
+            className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
+          >
+            {uniqueClients.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
-          <select className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow">
-            <option>Todos os Status</option>
+
+          <select
+            value={selectedStatus}
+            onChange={(e) => setSelectedStatus(e.target.value)}
+            className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
+          >
+            {uniqueStatus.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow">
-            <option>Todas as Datas</option>
+
+          <select
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
+          >
+            {uniqueDates.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
         </div>
       </div>
@@ -70,7 +123,7 @@ export const Calls: React.FC = () => {
             </button>
           </div>
           <span className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-mono">
-            {calls.length} RECS
+            {filteredCalls.length} RECS
           </span>
         </div>
 
@@ -79,8 +132,10 @@ export const Calls: React.FC = () => {
             <Loader2 className="w-8 h-8 text-primary animate-spin mx-auto mb-3" />
             Carregando dados...
           </div>
-        ) : calls.length === 0 ? (
-          <div className="text-center py-12 text-slate-500 dark:text-slate-400">Nenhuma ligação encontrada.</div>
+        ) : filteredCalls.length === 0 ? (
+          <div className="text-center py-12 text-slate-500 dark:text-slate-400">
+            {calls.length > 0 ? 'Nenhum resultado para os filtros selecionados.' : 'Nenhuma ligação encontrada.'}
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -99,7 +154,7 @@ export const Calls: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {calls.map((call) => (
+                {filteredCalls.map((call) => (
                   <tr key={call.id} className="group hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="px-5 py-3.5 first:pl-6 font-mono text-xs text-slate-600 dark:text-slate-400">{call.date}</td>
                     <td className="px-5 py-3.5 font-medium text-slate-900 dark:text-white truncate max-w-[140px]" title={call.campaignName}>{call.campaignName}</td>
