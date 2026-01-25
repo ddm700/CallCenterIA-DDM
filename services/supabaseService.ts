@@ -519,15 +519,122 @@ export const supabaseService = {
   },
 
   async getQualityTopObjections(): Promise<any[]> {
+    // Instead of using the view (which returns long summaries), we fetch recent failed calls and categorize them manually
     const { data, error } = await supabase
-      .from('vw_quality_top_objections')
-      .select('*');
+      .from('calls')
+      .select('analysis, summary, ended_reason')
+      .eq('success_evaluation', false) // Only look at failed calls (objections)
+      .order('started_at', { ascending: false })
+      .limit(200); // Analyze sample of last 200 calls
 
     if (error) {
       console.error('Error fetching top objections:', error);
       return [];
     }
 
-    return data || [];
+    if (!data || data.length === 0) return [];
+
+    const objectionCounts: Record<string, number> = {};
+
+    data.forEach((call: any) => {
+      let objection = "Outros";
+      const summaryLower = (call.summary || '').toLowerCase();
+      const analysisObj = call.analysis || {};
+      const reasonLower = (call.ended_reason || '').toLowerCase();
+
+      // 1. Try to find structured objection in VAPI analysis (if available in future)
+      if (analysisObj.objection) {
+        objection = analysisObj.objection;
+      }
+      // 2. Keyword Analysis on Summary (Heuristics)
+      else if (summaryLower.includes('dinheiro') || summaryLower.includes('caro') || summaryLower.includes('financeir') || summaryLower.includes('custo') || summaryLower.includes('valor') || summaryLower.includes('pagar')) {
+        objection = "Preço / Condição Financeira";
+      }
+      else if (summaryLower.includes('não tem interesse') || summaryLower.includes('desinteress') || summaryLower.includes('não quer') || summaryLower.includes('agradece') || summaryLower.includes('não precisa')) {
+        objection = "Sem Interesse";
+      }
+      else if (summaryLower.includes('ocupado') || summaryLower.includes('ligar mais tarde') || summaryLower.includes('reunião') || summaryLower.includes('trabalha') || summaryLower.includes('ligue') || summaryLower.includes('momento') || summaryLower.includes('agendar')) {
+        objection = "Ocupado / Agendar Retorno";
+      }
+      else if (summaryLower.includes('já possui') || summaryLower.includes('já tem') || summaryLower.includes('concorrente') || summaryLower.includes('outro plano') || summaryLower.includes('já fiz') || summaryLower.includes('resolvi')) {
+        objection = "Já possui Solução/Concorrente";
+      }
+      else if (summaryLower.includes('enganado') || summaryLower.includes('não é') || summaryLower.includes('erro') || summaryLower.includes('desconhece') || summaryLower.includes('não sou')) {
+        objection = "Contato Errado / Engano";
+      }
+      else if (reasonLower.includes('customer-ended')) {
+        // Specific VAPI reason when user hangs up interaction
+        objection = "Desligou na Cara / Sem Interação";
+      }
+      else if (summaryLower.includes('caixa postal') || summaryLower.includes('voicemail') || summaryLower.includes('recado') || summaryLower.includes('sinal') || summaryLower.includes('eletrônica')) {
+        objection = "Caixa Postal / Não Atendeu";
+      }
+      else if (call.summary && call.summary.length > 5 && call.summary.length < 50) {
+        // Short summaries tend to be the objection itself
+        objection = call.summary;
+      }
+      else {
+        // If we have a long summary but no keyword hit, and it wasn't a hangup, it's generic
+        objection = "Objeção Genérica (Diversos)";
+      }
+
+      // Increment count
+      objectionCounts[objection] = (objectionCounts[objection] || 0) + 1;
+    });
+
+    // Convert to array and sort
+    const sortedObjections = Object.entries(objectionCounts)
+      .map(([objection, occurrences]) => ({
+        objection,
+        occurrences,
+        rank: 0 // placeholder
+      }))
+      .sort((a, b) => b.occurrences - a.occurrences)
+      .slice(0, 5); // Top 5
+
+    // Adiciona Rank
+    return sortedObjections.map((obj, index) => ({ ...obj, rank: index + 1 }));
+  },
+
+  async getQualityRealtimeOverview(): Promise<any> {
+    try {
+      // 1. Get Latest Call with Transcription for the "Live Box"
+      const { data: lastCalls } = await supabase
+        .from('calls')
+        .select('*')
+        .not('transcript', 'is', null) // Must have text
+        .neq('transcript', '')
+        .order('started_at', { ascending: false })
+        .limit(1);
+
+      const lastCall = lastCalls && lastCalls.length > 0 ? lastCalls[0] : null;
+
+      // 2. Sentiment Stats (Proxy: Success = Positive, Fail = Negative/Neutral)
+      const { count: totalCalls } = await supabase.from('calls').select('*', { count: 'exact', head: true });
+      const { count: successCalls } = await supabase.from('calls').select('*', { count: 'exact', head: true }).eq('success_evaluation', true);
+
+      const sentimentPositivePercent = totalCalls ? Math.round(((successCalls || 0) / totalCalls) * 100) : 0;
+
+      // 3. Simple Cluster Count
+      const { data: objectionSample } = await supabase
+        .from('calls')
+        .select('ended_reason')
+        .limit(100);
+
+      const uniqueClusters = new Set(objectionSample?.map((c: any) => c.ended_reason)).size || 0;
+
+      return {
+        lastCall: lastCall ? {
+          transcript: lastCall.summary || lastCall.transcript, // Prefer summary for brevity if available
+          objection: lastCall.analysis?.objection || lastCall.ended_reason || 'Desconhecido',
+          sentiment: lastCall.success_evaluation ? 'true' : 'false'
+        } : null,
+        sentimentPositivePercent,
+        totalClusters: uniqueClusters
+      };
+    } catch (error) {
+      console.error('Error fetching realtime overview:', error);
+      return { lastCall: null, sentimentPositivePercent: 0, totalClusters: 0 };
+    }
   }
 };
