@@ -2,7 +2,7 @@ import { supabase } from '../lib/supabaseClient';
 import { Campaign, Contact, Call } from '../types';
 
 export const supabaseService = {
-  
+
   // --- CAMPAIGNS ---
 
   async getCampaigns(): Promise<Campaign[]> {
@@ -46,7 +46,7 @@ export const supabaseService = {
         name: c.nome,
         institution: c.instituicao || '',
         type: (c.tipo_telefonia === 'whatsapp' ? 'WhatsApp' : 'VAPI') as 'VAPI' | 'WhatsApp',
-        status: c.ativa ? 'active' : 'paused',
+        status: c.status || (c.ativa ? 'active' : 'paused'),  // Use database status, fallback to ativa
         totalContacts: total || 0,
         pendingContacts: pending || 0,
         completedContacts: completed || 0,
@@ -125,7 +125,7 @@ export const supabaseService = {
   async toggleCampaignStatus(id: string, isActive: boolean): Promise<void> {
     const { error } = await supabase
       .from('campaigns')
-      .update({ 
+      .update({
         ativa: isActive
       })
       .eq('id', id);
@@ -183,7 +183,7 @@ export const supabaseService = {
 
   async checkExistingCpfs(cpfs: string[]): Promise<string[]> {
     if (!cpfs || cpfs.length === 0) return [];
-    
+
     const cleanCpfs = cpfs.map(c => c.replace(/\D/g, '')).filter(Boolean);
     if (cleanCpfs.length === 0) return [];
 
@@ -202,12 +202,18 @@ export const supabaseService = {
 
   async importContacts(campaignId: string, contactsData: { nome: string; cpf: string; telefone: string; instituicao: string }[]): Promise<void> {
     if (!contactsData || contactsData.length === 0) return;
-    
+
     const contactsPayload = contactsData.map(c => ({
       nome: c.nome,
       cpf: c.cpf.replace(/\D/g, ''),
       instituicao: c.instituicao,
-      telefone: c.telefone
+      telefone: (() => {
+        const cleanParams = c.telefone.replace(/\D/g, '');
+        // If it already has 12 or 13 digits (55 + DDD + Num), assume it's full. 
+        // Otherwise if 10 or 11 (DDD + Num), add +55.
+        if (cleanParams.length === 12 || cleanParams.length === 13) return `+${cleanParams}`;
+        return `+55${cleanParams}`;
+      })()
     }));
 
     const { data: insertedContacts, error: insertError } = await supabase
@@ -221,9 +227,9 @@ export const supabaseService = {
     }
 
     if (!insertedContacts) return;
-    
+
     const campaignContactsPayload = [];
-    
+
     const insertedMap: Record<string, string[]> = {};
     insertedContacts.forEach((c: any) => {
       if (!insertedMap[c.cpf]) insertedMap[c.cpf] = [];
@@ -233,10 +239,10 @@ export const supabaseService = {
     for (const inputContact of contactsData) {
       const cleanCpf = inputContact.cpf.replace(/\D/g, '');
       const availableIds = insertedMap[cleanCpf];
-      
+
       if (availableIds && availableIds.length > 0) {
-        const contactId = availableIds.shift(); 
-        
+        const contactId = availableIds.shift();
+
         campaignContactsPayload.push({
           campaign_id: campaignId,
           contact_id: contactId,
@@ -263,7 +269,7 @@ export const supabaseService = {
   async resetContactAttempts(campaignContactId: string): Promise<void> {
     const { error } = await supabase
       .from('campaign_contacts')
-      .update({ 
+      .update({
         tentativas: 0,
         status: 'pendente',
         ultima_tentativa: null
@@ -332,30 +338,43 @@ export const supabaseService = {
       const minutes = Math.floor(durationSeconds / 60);
       const seconds = durationSeconds % 60;
       const durationFormatted = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-      
+
       return {
         id: call.id,
         vapiCallId: call.vapi_call_id,
         date: call.started_at ? new Date(call.started_at).toLocaleString('pt-BR') : '-',
-        campaignName: call.campaign_contacts?.campaigns?.nome || 'Direta',
-        clientName: call.campaign_contacts?.contacts?.nome || 'Desconhecido',
-        cpf: call.campaign_contacts?.contacts?.cpf, 
-        phone: call.campaign_contacts?.contacts?.telefone || call.customer_number || '-',
+        // Use trigger-populated fields first, fallback to JOIN data
+        campaignName: call.campaign_name || call.campaign_contacts?.campaigns?.nome || 'Direta',
+        clientName: call.cliente || call.campaign_contacts?.contacts?.nome || 'Desconhecido',
+        cpf: call.cpf || call.campaign_contacts?.contacts?.cpf || '-',
+        phone: call.customer_number || call.campaign_contacts?.contacts?.telefone || '-',
         duration: durationFormatted,
-        status: call.status === 'completed' ? 'Concluída' : 'Falhou', 
+        status: call.status === 'completed' ? 'Concluída' : 'Falhou',
         reason: call.ended_reason || '-',
-        success: call.success_evaluation === 'true' || false, 
+        success: call.success_evaluation === 'true' || call.success_evaluation === true || false,
         cost: Number(call.custo_total) || 0,
+        // Add detailed costs
+        custo_stt: Number(call.custo_stt) || 0,
+        custo_tts: Number(call.custo_tts) || 0,
+        custo_vapi: Number(call.custo_vapi) || 0,
+        custo_total: Number(call.custo_total) || 0,
         recordingUrl: call.recording_url,
+        stereoRecordingUrl: call.stereo_recording_url,
         transcript: call.transcript,
         summary: call.summary,
-        analysis: call.analysis 
+        // Add structured data fields
+        structured_name: call.structured_name,
+        structured_rating_label: call.structured_rating_label,
+        structured_rating_text: call.structured_rating_text,
+        structured_purpose: call.structured_purpose,
+        structured_main_points: call.structured_main_points,
+        analysis: call.analysis
       };
     });
   },
 
   // --- SETTINGS (DB) ---
-  
+
   async getSettingsFromDb(): Promise<Record<string, string>> {
     const { data } = await supabase.from('app_settings').select('setting_key, setting_value');
     if (!data) return {};
@@ -371,5 +390,144 @@ export const supabaseService = {
       { onConflict: 'setting_key' }
     );
     if (error) console.error(`Error saving setting ${key}:`, error);
+  },
+
+  // --- REPORTS (Views) ---
+
+  async getReportKPIs(): Promise<any> {
+    const { data, error } = await supabase
+      .from('vw_report_kpis')
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('Error fetching report KPIs:', error);
+      return {
+        total_calls: 0,
+        contacted_calls: 0,
+        contact_rate_percent: 0,
+        successful_calls: 0,
+        success_rate_percent: 0,
+        avg_duration_seconds: 0,
+        total_cost: 0
+      };
+    }
+
+    return data;
+  },
+
+  async getReportFunnel(): Promise<any[]> {
+    const { data, error } = await supabase
+      .from('vw_report_funnel')
+      .select('*');
+
+    if (error) {
+      console.error('Error fetching report funnel:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  async getReportTerminationReasons(): Promise<any[]> {
+    const { data, error } = await supabase
+      .from('vw_report_termination_reasons')
+      .select('*');
+
+    if (error) {
+      console.error('Error fetching termination reasons:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  async getReportDailyActivity(): Promise<any[]> {
+    const { data, error } = await supabase
+      .from('vw_report_daily_activity')
+      .select('*');
+
+    if (error) {
+      console.error('Error fetching daily activity:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  async getReportDailyCosts(): Promise<any[]> {
+    const { data, error } = await supabase
+      .from('vw_report_daily_costs')
+      .select('*');
+
+    if (error) {
+      console.error('Error fetching daily costs:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  // --- QUALITY (Views) ---
+
+  async getQualityMetrics(): Promise<any> {
+    const { data, error } = await supabase
+      .from('vw_quality_metrics')
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('Error fetching quality metrics:', error);
+      return {
+        nps_score: 0,
+        avg_rating: 0,
+        promoters: 0,
+        detractors: 0,
+        total_rated: 0,
+        promoters_percent: 0,
+        detractors_percent: 0
+      };
+    }
+
+    return data;
+  },
+
+  async getQualityRatingDistribution(): Promise<any[]> {
+    const { data, error } = await supabase
+      .from('vw_quality_rating_distribution')
+      .select('*');
+
+    if (error) {
+      console.error('Error fetching rating distribution:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  async getQualityByCampaign(): Promise<any[]> {
+    const { data, error } = await supabase
+      .from('vw_quality_by_campaign')
+      .select('*');
+
+    if (error) {
+      console.error('Error fetching quality by campaign:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  async getQualityTopObjections(): Promise<any[]> {
+    const { data, error } = await supabase
+      .from('vw_quality_top_objections')
+      .select('*');
+
+    if (error) {
+      console.error('Error fetching top objections:', error);
+      return [];
+    }
+
+    return data || [];
   }
 };

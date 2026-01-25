@@ -1,0 +1,37 @@
+{
+    "assistantId": "{{ $json.assistantId }}",
+    "phoneNumberId": "{{ $json.phoneNumberId }}",
+    "type": "outboundPhoneCall",
+    "serverUrl": "{{ $('Webhook').item.json.body.callbackUrl }}",
+    "customer": {
+        "number": "{{ $('Validador do Telefone').item.json.phoneValidation.e164 }}",
+        "name": "{{ $('Validador do Telefone').item.json.body.customerName }}"
+    },
+    "metadata": {
+        "contactId": "{{ $('Webhook').item.json.body.contactId }}",
+        "campaignContactId": "{{ $('Webhook').item.json.body.campaignContactId }}",
+        "phoneId": "{{ $('Webhook').item.json.body.phoneId }}",
+        "campaignId": "{{ $('Webhook').item.json.body.campaignId }}",
+        "cpf": "{{ $('Webhook').item.json.body.cpf }}"
+    },
+    "assistantOverrides": {
+        "firstMessage": "Olá {{ $('Validador do Telefone').item.json.body.customerName }} sou a Júlia, falo em nome da DDM, que atua junto à {{ $json.assistantOverrides.variableValues.instituicao }}. Eu ligo para informar que você possui um débito total à vista de {{ $json.assistantOverrides.variableValues.ValorBrutoAVista }} em aberto. Tudo bem com você?",
+        "variableValues": {
+            "instituicao": "{{ $json.assistantOverrides.variableValues.instituicao }}",
+            "ValorBrutoCartao": "{{ $json.assistantOverrides.variableValues.ValorBrutoCartao }}",
+            "PercDescParcCartao": "{{ $json.assistantOverrides.variableValues.PercDescParcCartao }}",
+            "ValorDescParcCartao": "{{ $json.assistantOverrides.variableValues.ValorDescParcCartao }}",
+            "ValorFinalCartao": "{{ $json.assistantOverrides.variableValues.ValorFinalCartao }}",
+            "ParcelasCartao": "{{ $json.assistantOverrides.variableValues.ParcelasCartao }}",
+            "ValorBrutoAVista": "{{ $json.assistantOverrides.variableValues.ValorBrutoAVista }}",
+            "PercDescAVista": "{{ $json.assistantOverrides.variableValues.PercDescAVista }}",
+            "ValorDescAVista": "{{ $json.assistantOverrides.variableValues.ValorDescAVista }}",
+            "ValorFinalAVista": "{{ $json.assistantOverrides.variableValues.ValorFinalAVista }}",
+            "ValorBrutoBoleto": "{{ $json.assistantOverrides.variableValues.ValorBrutoBoleto }}",
+            "PercDescParcBoleto": "{{ $json.assistantOverrides.variableValues.PercDescParcBoleto }}",
+            "ValorDescParcBoleto": "{{ $json.assistantOverrides.variableValues.ValorDescParcBoleto }}",
+            "ValorFinalBoleto": "{{ $json.assistantOverrides.variableValues.ValorFinalBoleto }}",
+            "ParcelasBoleto": "{{ $json.assistantOverrides.variableValues.ParcelasBoleto }}"
+        }
+    }
+}

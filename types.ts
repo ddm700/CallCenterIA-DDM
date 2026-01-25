@@ -8,25 +8,25 @@ export interface Campaign {
   institution: string; // db: instituicao
   type: 'VAPI' | 'WhatsApp'; // db: tipo_telefonia
   status: CampaignStatus; // derived from ativa
-  
+
   // Calculated fields (from joins or counts)
   totalContacts?: number;
   pendingContacts?: number;
   completedContacts?: number;
   successRate?: number;
-  
+
   active: boolean; // db: ativa
-  
+
   // VAPI specific fields
   vapi_assistant_id?: string; // db: assistant_vapi_id
   vapi_phone_id?: string; // db: linha_vapi_id
-  
+
   maxAttempts: number; // db: max_tentativas
   intervalMinutes: number; // db: intervalo_minutos
   startTime: string; // db: janela_inicio
   endTime: string; // db: janela_fim
   created_at?: string;
-  
+
   // New fields from schema
   description?: string;
   simultaneousCalls?: number;
@@ -52,15 +52,30 @@ export interface Call {
   date: string; // started_at
   campaignName: string;
   clientName: string;
+  cpf?: string;
   phone: string;
   duration: string; // duration_seconds formatted
   status: 'Concluída' | 'Falhou' | 'Em andamento';
   reason: string; // ended_reason
   success: boolean; // derived or success_evaluation
   cost: number; // custo_total
+  // Detailed costs
+  custo_stt?: number;
+  custo_tts?: number;
+  custo_vapi?: number;
+  custo_total?: number;
+  // Recording URLs
   recordingUrl?: string;
+  stereoRecordingUrl?: string;
+  // Transcription and analysis
   transcript?: string;
   summary?: string;
+  // Structured data from VAPI
+  structured_name?: string;
+  structured_rating_label?: string;
+  structured_rating_text?: string;
+  structured_purpose?: string;
+  structured_main_points?: string;
   analysis?: any; // JSON object from VAPI containing detailed extraction
 }
 
