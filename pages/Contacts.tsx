@@ -199,13 +199,26 @@ export const Contacts: React.FC = () => {
       // Map excel columns to expected format
       // Expected: nome, cpf, telefone, instituicao
       const formattedData = importPreview.map((row: any) => {
-        // Debug single row to check keys
-        // console.log('Row:', row);
+        // Normalize keys to lowercase to avoid case sensitivity issues
+        const normalizedRow: any = {};
+        Object.keys(row).forEach(key => {
+          normalizedRow[key.toLowerCase().trim()] = row[key];
+        });
+
+        // Smart Phone Detection: look for common variations
+        const phoneValue = normalizedRow['telefone'] ||
+          normalizedRow['telefone1'] ||
+          normalizedRow['phone'] ||
+          normalizedRow['celular'] ||
+          normalizedRow['mobile'] ||
+          normalizedRow['whatsapp'] ||
+          '';
+
         return {
-          nome: row.nome || row.Nome || row.Name || 'Sem Nome',
-          cpf: String(row.cpf || row.CPF || row.Documento || ''),
-          telefone: String(row.telefone || row.Telefone || row.Phone || row.Celular || ''),
-          instituicao: row.instituicao || row.Instituicao || row.Empresa || ''
+          nome: normalizedRow['nome'] || normalizedRow['name'] || normalizedRow['cliente'] || 'Sem Nome',
+          cpf: String(normalizedRow['cpf'] || normalizedRow['documento'] || ''),
+          telefone: String(phoneValue),
+          instituicao: normalizedRow['instituicao'] || normalizedRow['empresa'] || normalizedRow['organization'] || ''
         };
       }).filter(r => {
         // Basic validation: must have some phone number
