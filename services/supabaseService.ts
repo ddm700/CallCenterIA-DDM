@@ -353,6 +353,7 @@ export const supabaseService = {
       .select(`
         *,
         campaign_contacts (
+          campaign_id,
           contacts (
             nome,
             cpf,
@@ -377,12 +378,19 @@ export const supabaseService = {
       const seconds = durationSeconds % 60;
       const durationFormatted = `${minutes}:${seconds.toString().padStart(2, '0')}`;
 
+      // Robust Campaign Name Extraction
+      let campaignName = 'Direta';
+      if (call.campaign_name) {
+        campaignName = call.campaign_name;
+      } else if (call.campaign_contacts?.campaigns?.nome) {
+        campaignName = call.campaign_contacts.campaigns.nome;
+      }
+
       return {
         id: call.id,
         vapiCallId: call.vapi_call_id,
         date: call.started_at ? new Date(call.started_at).toLocaleString('pt-BR') : '-',
-        // Use trigger-populated fields first, fallback to JOIN data
-        campaignName: call.campaign_name || call.campaign_contacts?.campaigns?.nome || 'Direta',
+        campaignName: campaignName,
         clientName: call.cliente || call.campaign_contacts?.contacts?.nome || 'Desconhecido',
         cpf: call.cpf || call.campaign_contacts?.contacts?.cpf || '-',
         phone: call.customer_number || call.campaign_contacts?.contacts?.telefone || '-',

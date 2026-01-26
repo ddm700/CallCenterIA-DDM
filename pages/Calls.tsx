@@ -19,11 +19,18 @@ export const Calls: React.FC = () => {
   const [selectedCall, setSelectedCall] = useState<Call | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
+  // Filter Data
+  const [allCampaignNames, setAllCampaignNames] = useState<string[]>([]);
+
   const fetchCalls = async () => {
     setLoading(true);
     try {
-      const data = await supabaseService.getCalls();
-      setCalls(data);
+      const [callsData, campaignsData] = await Promise.all([
+        supabaseService.getCalls(),
+        supabaseService.getCampaigns()
+      ]);
+      setCalls(callsData);
+      setAllCampaignNames(campaignsData.map(c => c.name));
     } catch (error) {
       console.error(error);
     } finally {
@@ -38,7 +45,12 @@ export const Calls: React.FC = () => {
   // --- Filtering Logic ---
 
   // 1. Extract unique options for dropdowns
-  const uniqueCampaigns = ['Todas as Campanhas', ...Array.from(new Set(calls.map(c => c.campaignName))).filter(Boolean).sort()];
+  // Combine campaigns from actual calls AND registered campaigns to ensure full list exists in filter
+  const uniqueCampaigns = ['Todas as Campanhas', ...Array.from(new Set([
+    ...calls.map(c => c.campaignName),
+    ...allCampaignNames
+  ])).filter(Boolean).sort()];
+
   const uniqueClients = ['Todos os Clientes', ...Array.from(new Set(calls.map(c => c.clientName))).filter(Boolean).sort()];
   const uniqueStatus = ['Todos os Status', ...Array.from(new Set(calls.map(c => c.status))).filter(Boolean).sort()];
 

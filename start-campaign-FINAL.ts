@@ -346,34 +346,31 @@ Deno.serve(async (req) => {
             }
         };
 
-        // 7. Processar contatos em lotes
-        const batchSize = campaign.tipo_telefonia === 'vapi' ? vapiLines.length : (campaign.ligacoes_simultaneas || 1);
+        // 7. Processar contatos em lotes (PARALELO)
+        // Aumentamos o lote e processamos em paralelo para evitar Timeout da Edge Function
+        const CONCURRENT_BATCH_SIZE = 25; // 25 chamadas simultâneas
         const allResults: ProcessResult[] = [];
 
-        console.log(`🚀 Processando ${eligibleContacts.length} contatos em lotes de ${batchSize}`);
+        console.log(`🚀 Processando ${eligibleContacts.length} contatos em paralelo (Lotes de ${CONCURRENT_BATCH_SIZE})`);
 
-        for (let i = 0; i < eligibleContacts.length; i += batchSize) {
-            const batch = eligibleContacts.slice(i, i + batchSize);
-            const batchNumber = Math.floor(i / batchSize) + 1;
-            const totalBatches = Math.ceil(eligibleContacts.length / batchSize);
+        for (let i = 0; i < eligibleContacts.length; i += CONCURRENT_BATCH_SIZE) {
+            const batch = eligibleContacts.slice(i, i + CONCURRENT_BATCH_SIZE);
+            const batchNumber = Math.floor(i / CONCURRENT_BATCH_SIZE) + 1;
+            const totalBatches = Math.ceil(eligibleContacts.length / CONCURRENT_BATCH_SIZE);
 
             console.log(`\n--- Lote ${batchNumber}/${totalBatches} (${batch.length} contatos) ---`);
 
-            const batchResults = [];
-            for (let j = 0; j < batch.length; j++) {
-                const result = await processContact(batch[j], i + j);
-                batchResults.push(result);
+            // Dispara todo o lote em paralelo e aguarda
+            const batchResult = await Promise.all(
+                batch.map((contact, index) => processContact(contact, i + index))
+            );
 
-                if (j < batch.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                }
-            }
+            allResults.push(...batchResult);
 
-            allResults.push(...batchResults);
-
-            if (i + batchSize < eligibleContacts.length) {
-                console.log(`⏳ Aguardando ${DELAY_BETWEEN_BATCHES_MS}ms antes do próximo lote...`);
-                await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_BATCHES_MS));
+            // Pequena pausa entre lotes para dar respiro ao banco/n8n (1 segundo)
+            if (i + CONCURRENT_BATCH_SIZE < eligibleContacts.length) {
+                console.log(`⏳ Aguardando 1s antes do próximo lote...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
             }
         }
 
