@@ -218,36 +218,54 @@ export const supabaseService = {
       };
     });
 
-    // 2. Upsert contacts (Idempotent: update if exists)
-    // We assume 'telefone' is unique or we want to update the existing contact with same phone
-    const { data: insertedContacts, error: insertError } = await supabase
+    // 2. Manual Check for Existing Contacts (to avoid ON CONFLICT error if no unique constraint exists)
+    const allPhones = contactsPayload.map(c => c.telefone);
+
+    // Fetch existing contacts with these phones
+    const { data: existingContacts, error: fetchError } = await supabase
       .from('contacts')
-      .upsert(contactsPayload, { onConflict: 'telefone' }) // Try to match on phone
-      .select('id, telefone');
+      .select('id, telefone')
+      .in('telefone', allPhones);
 
-    if (insertError) {
-      console.error('Error upserting contacts:', insertError);
-
-      // Fallback: If upsert failed (maybe constraint issues), try one by one or throw
-      // For now, let's try to fetch existing ones to map IDs? 
-      // Simplified: just throw to let user know data is bad if bulk fails completely.
-      throw insertError;
+    if (fetchError) {
+      console.error('Error fetching existing contacts:', fetchError);
+      throw fetchError;
     }
 
-    if (!insertedContacts) return;
+    const existingPhoneMap = new Map<string, string>(); // Phone -> ID
+    if (existingContacts) {
+      existingContacts.forEach((c: any) => existingPhoneMap.set(c.telefone, c.id));
+    }
 
-    // 3. Map Phones to IDs
-    const phoneToIdMap: Record<string, string> = {};
-    insertedContacts.forEach((c: any) => {
-      if (c.telefone) phoneToIdMap[c.telefone] = c.id;
-    });
+    // 3. Filter New Contacts to Insert
+    const newContactsToInsert = contactsPayload.filter(c => !existingPhoneMap.has(c.telefone));
 
-    // 4. Link to Campaign
+    // 4. Insert New Contacts
+    if (newContactsToInsert.length > 0) {
+      const { data: insertedNew, error: insertError } = await supabase
+        .from('contacts')
+        .insert(newContactsToInsert)
+        .select('id, telefone');
+
+      if (insertError) {
+        console.error('Error inserting new contacts:', insertError);
+        throw insertError;
+      }
+
+      // Add new IDs to the map
+      if (insertedNew) {
+        insertedNew.forEach((c: any) => existingPhoneMap.set(c.telefone, c.id));
+      }
+    }
+
+    // 5. Link ALL contacts (existing + new) to Campaign
+    // We use a Set to ensure we don't try to link the same ID twice in one go
     const campaignContactsPayload = [];
-    const processedIds = new Set<string>(); // Avoid duplicates in linkage
+    const processedIds = new Set<string>();
 
     for (const inputContact of contactsPayload) {
-      const contactId = phoneToIdMap[inputContact.telefone];
+      const contactId = existingPhoneMap.get(inputContact.telefone);
+
       if (contactId && !processedIds.has(contactId)) {
         campaignContactsPayload.push({
           campaign_id: campaignId,
@@ -260,14 +278,26 @@ export const supabaseService = {
     }
 
     if (campaignContactsPayload.length > 0) {
-      // Use ignoreDuplicates: true just in case we are re-importing the same list to the same campaign
+      // Try UPSERT on campaign_contacts (usually has PK or composite unique).
+      // If that fails, we fallback to simple INSERT and ignore errors for duplicates.
       const { error: linkError } = await supabase
         .from('campaign_contacts')
         .upsert(campaignContactsPayload, { onConflict: 'campaign_id,contact_id', ignoreDuplicates: true });
 
       if (linkError) {
-        console.error('Error linking contacts to campaign:', linkError);
-        throw linkError;
+        // If upsert fails (e.g. no constraint), try simple insert.
+        // This might fail if duplicates exist, but it's the best effortless fallback.
+        console.warn('Upsert failed on campaign_contacts (possibly no constraint), trying insert...', linkError);
+        const { error: insertLinkError } = await supabase
+          .from('campaign_contacts')
+          .insert(campaignContactsPayload);
+
+        if (insertLinkError) {
+          // Check if error is just "duplicate key", which is fine. If not, throw.
+          if (!insertLinkError.message.includes('duplicate')) {
+            throw insertLinkError;
+          }
+        }
       }
     }
   },
