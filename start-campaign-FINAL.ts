@@ -293,6 +293,7 @@ Deno.serve(async (req) => {
                     campaignId: campaign.id,
                     customerNumber: phoneNumber,
                     customerName: contact.nome,
+                    customerCpf: contact.cpf,
                     assistantId: campaign.assistant_vapi_id,
                     phoneNumberId: linhaVapiId || campaign.linha_vapi_id?.split(',')[0],
                     callbackUrl: `${supabaseUrl}/functions/v1/vapi-call-callback`,
