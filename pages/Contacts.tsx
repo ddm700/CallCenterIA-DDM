@@ -189,31 +189,44 @@ export const Contacts: React.FC = () => {
   };
 
   const handleImportSubmit = async () => {
+    console.log('Iniciando importação...', { campaignId: importCampaignId, rows: importPreview.length });
+
     if (!importCampaignId) return alert('Selecione uma campanha de destino.');
-    if (importPreview.length === 0) return alert('O arquivo está vazio ou inválido.');
+    if (!importPreview || importPreview.length === 0) return alert('O arquivo está vazio ou não pôde ser lido. Verifique o formato.');
 
     setImporting(true);
     try {
       // Map excel columns to expected format
       // Expected: nome, cpf, telefone, instituicao
-      const formattedData = importPreview.map((row: any) => ({
-        nome: row.nome || row.Nome || row.Name || 'Sem Nome',
-        cpf: String(row.cpf || row.CPF || row.Documento || ''),
-        telefone: String(row.telefone || row.Telefone || row.Phone || row.Celular || ''),
-        instituicao: row.instituicao || row.Instituicao || row.Empresa || ''
-      })).filter(r => r.telefone && r.telefone.length > 5);
+      const formattedData = importPreview.map((row: any) => {
+        // Debug single row to check keys
+        // console.log('Row:', row);
+        return {
+          nome: row.nome || row.Nome || row.Name || 'Sem Nome',
+          cpf: String(row.cpf || row.CPF || row.Documento || ''),
+          telefone: String(row.telefone || row.Telefone || row.Phone || row.Celular || ''),
+          instituicao: row.instituicao || row.Instituicao || row.Empresa || ''
+        };
+      }).filter(r => {
+        // Basic validation: must have some phone number
+        const hasPhone = r.telefone && r.telefone.replace(/\D/g, '').length > 5;
+        if (!hasPhone) console.warn('Skipping row without valid phone:', r);
+        return hasPhone;
+      });
 
-      if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado (verifique colunas: nome, telefone, cpf)");
+      console.log('Dados formatados para envio:', formattedData.length);
+
+      if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado. Verifique se as colunas 'telefone' e 'nome' existem no arquivo.");
 
       await supabaseService.importContacts(importCampaignId, formattedData);
 
-      alert(`${formattedData.length} contatos importados com sucesso!`);
+      alert(`Sucesso! ${formattedData.length} contatos foram enviados para processamento.`);
       setIsImportOpen(false);
       setImportFile(null);
       setImportPreview([]);
       fetchData();
     } catch (e: any) {
-      console.error(e);
+      console.error('Erro no submit de importação:', e);
       alert(`Erro na importação: ${e.message}`);
     } finally {
       setImporting(false);
@@ -328,8 +341,8 @@ export const Contacts: React.FC = () => {
                           onClick={() => handleCallContact(contact)}
                           disabled={callingContactId === contact.id}
                           className={`p-1.5 rounded transition-colors ${callingContactId === contact.id
-                              ? 'bg-orange-100 dark:bg-orange-900/30 text-primary cursor-wait'
-                              : 'hover:bg-green-100 dark:hover:bg-green-900/30 text-green-600 dark:text-green-400 hover:text-green-700'
+                            ? 'bg-orange-100 dark:bg-orange-900/30 text-primary cursor-wait'
+                            : 'hover:bg-green-100 dark:hover:bg-green-900/30 text-green-600 dark:text-green-400 hover:text-green-700'
                             }`}
                           title="Ligar Agora"
                         >
@@ -473,7 +486,12 @@ export const Contacts: React.FC = () => {
           <div className="flex justify-end gap-3 mt-4">
             <Button variant="secondary" onClick={() => setIsImportOpen(false)}>Cancelar</Button>
             <Button onClick={handleImportSubmit} disabled={!importFile || !importCampaignId || importing}>
-              {importing ? 'Importando...' : 'Processar Importação'}
+              {importing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Processando...
+                </>
+              ) : 'Processar Importação'}
             </Button>
           </div>
         </div>

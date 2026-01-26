@@ -203,59 +203,67 @@ export const supabaseService = {
   async importContacts(campaignId: string, contactsData: { nome: string; cpf: string; telefone: string; instituicao: string }[]): Promise<void> {
     if (!contactsData || contactsData.length === 0) return;
 
-    const contactsPayload = contactsData.map(c => ({
-      nome: c.nome,
-      cpf: c.cpf.replace(/\D/g, ''),
-      instituicao: c.instituicao,
-      telefone: (() => {
-        const cleanParams = c.telefone.replace(/\D/g, '');
-        // If it already has 12 or 13 digits (55 + DDD + Num), assume it's full. 
-        // Otherwise if 10 or 11 (DDD + Num), add +55.
-        if (cleanParams.length === 12 || cleanParams.length === 13) return `+${cleanParams}`;
-        return `+55${cleanParams}`;
-      })()
-    }));
+    // 1. Prepare Payload with normalized phones
+    const contactsPayload = contactsData.map(c => {
+      const cleanNums = c.telefone.replace(/\D/g, '');
+      const normalizedPhone = (cleanNums.length === 12 || cleanNums.length === 13)
+        ? `+${cleanNums}`
+        : `+55${cleanNums}`; // Default to BR
 
+      return {
+        nome: c.nome,
+        cpf: c.cpf.replace(/\D/g, ''),
+        instituicao: c.instituicao,
+        telefone: normalizedPhone
+      };
+    });
+
+    // 2. Upsert contacts (Idempotent: update if exists)
+    // We assume 'telefone' is unique or we want to update the existing contact with same phone
     const { data: insertedContacts, error: insertError } = await supabase
       .from('contacts')
-      .insert(contactsPayload)
-      .select('id, cpf');
+      .upsert(contactsPayload, { onConflict: 'telefone' }) // Try to match on phone
+      .select('id, telefone');
 
     if (insertError) {
-      console.error('Error inserting contacts:', insertError);
+      console.error('Error upserting contacts:', insertError);
+
+      // Fallback: If upsert failed (maybe constraint issues), try one by one or throw
+      // For now, let's try to fetch existing ones to map IDs? 
+      // Simplified: just throw to let user know data is bad if bulk fails completely.
       throw insertError;
     }
 
     if (!insertedContacts) return;
 
-    const campaignContactsPayload = [];
-
-    const insertedMap: Record<string, string[]> = {};
+    // 3. Map Phones to IDs
+    const phoneToIdMap: Record<string, string> = {};
     insertedContacts.forEach((c: any) => {
-      if (!insertedMap[c.cpf]) insertedMap[c.cpf] = [];
-      insertedMap[c.cpf].push(c.id);
+      if (c.telefone) phoneToIdMap[c.telefone] = c.id;
     });
 
-    for (const inputContact of contactsData) {
-      const cleanCpf = inputContact.cpf.replace(/\D/g, '');
-      const availableIds = insertedMap[cleanCpf];
+    // 4. Link to Campaign
+    const campaignContactsPayload = [];
+    const processedIds = new Set<string>(); // Avoid duplicates in linkage
 
-      if (availableIds && availableIds.length > 0) {
-        const contactId = availableIds.shift();
-
+    for (const inputContact of contactsPayload) {
+      const contactId = phoneToIdMap[inputContact.telefone];
+      if (contactId && !processedIds.has(contactId)) {
         campaignContactsPayload.push({
           campaign_id: campaignId,
           contact_id: contactId,
           status: 'pendente',
           tentativas: 0
         });
+        processedIds.add(contactId);
       }
     }
 
     if (campaignContactsPayload.length > 0) {
+      // Use ignoreDuplicates: true just in case we are re-importing the same list to the same campaign
       const { error: linkError } = await supabase
         .from('campaign_contacts')
-        .insert(campaignContactsPayload);
+        .upsert(campaignContactsPayload, { onConflict: 'campaign_id,contact_id', ignoreDuplicates: true });
 
       if (linkError) {
         console.error('Error linking contacts to campaign:', linkError);
