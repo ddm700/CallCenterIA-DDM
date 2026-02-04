@@ -36,7 +36,7 @@ export const Contacts: React.FC = () => {
   // Edit Modal State
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', phone: '' });
+  const [editForm, setEditForm] = useState({ name: '', phone: '', cpf: '' });
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -113,6 +113,17 @@ export const Contacts: React.FC = () => {
     if (!createForm.campaignId) return alert('Selecione uma campanha.');
     if (!createForm.name || !createForm.phone) return alert('Nome e Telefone são obrigatórios.');
 
+    // Validação de CPF obrigatório
+    if (!createForm.cpf || createForm.cpf.trim() === '') {
+      return alert('CPF é obrigatório.');
+    }
+
+    // Validação de formato de CPF (11 dígitos)
+    const cpfDigits = createForm.cpf.replace(/\D/g, '');
+    if (cpfDigits.length !== 11) {
+      return alert('CPF inválido. Deve conter 11 dígitos.');
+    }
+
     setCreating(true);
     try {
       const contactData = [{
@@ -130,7 +141,12 @@ export const Contacts: React.FC = () => {
       fetchData();
     } catch (e: any) {
       console.error(e);
-      alert(`Erro ao criar contato: ${e.message}`);
+      // Mensagem de erro específica para violação de constraint única
+      if (e.message?.includes('duplicate') || e.message?.includes('idx_contacts_cpf_telefone')) {
+        alert('Erro: Este CPF já está associado a este número de telefone.');
+      } else {
+        alert(`Erro ao criar contato: ${e.message}`);
+      }
     } finally {
       setCreating(false);
     }
@@ -140,26 +156,57 @@ export const Contacts: React.FC = () => {
 
   const openEditModal = (contact: Contact) => {
     setEditingContact(contact);
-    setEditForm({ name: contact.name, phone: contact.phone });
+    setEditForm({ name: contact.name, phone: contact.phone, cpf: contact.cpf || '' });
     setIsEditOpen(true);
   };
 
   const handleSaveEdit = async () => {
     if (!editingContact) return;
+
+    // Validação de CPF obrigatório
+    if (!editForm.cpf || editForm.cpf.trim() === '') {
+      return alert('CPF é obrigatório.');
+    }
+
+    // Validação de formato de CPF (11 dígitos)
+    const cpfDigits = editForm.cpf.replace(/\D/g, '');
+    if (cpfDigits.length !== 11) {
+      return alert('CPF inválido. Deve conter 11 dígitos.');
+    }
+
+    console.log('🔄 Atualizando contato:', {
+      contactId: editingContact.contactId,
+      nome: editForm.name,
+      telefone: editForm.phone,
+      cpf: editForm.cpf,
+      cpfNormalizado: cpfDigits
+    });
+
     try {
       // Update the actual person record (contacts table), usually linked via contactId
       await supabaseService.updateContact(editingContact.contactId, {
         nome: editForm.name,
-        telefone: editForm.phone
+        telefone: editForm.phone,
+        cpf: editForm.cpf
       });
 
+      console.log('✅ Contato atualizado com sucesso no banco');
+
       // Update local state
-      setContacts(prev => prev.map(c => c.id === editingContact.id ? { ...c, name: editForm.name, phone: editForm.phone } : c));
+      setContacts(prev => prev.map(c => c.id === editingContact.id ? { ...c, name: editForm.name, phone: editForm.phone, cpf: cpfDigits } : c));
       setIsEditOpen(false);
       alert('Contato atualizado com sucesso!');
-    } catch (e) {
-      console.error(e);
-      alert('Erro ao atualizar contato.');
+
+      // Refresh data from server to ensure consistency
+      await fetchData();
+    } catch (e: any) {
+      console.error('❌ Erro ao atualizar contato:', e);
+      // Mensagem de erro específica para violação de constraint única
+      if (e.message?.includes('duplicate') || e.message?.includes('idx_contacts_cpf_telefone')) {
+        alert('Erro: Este CPF já está associado a este número de telefone.');
+      } else {
+        alert('Erro ao atualizar contato.');
+      }
     }
   };
 
@@ -221,15 +268,19 @@ export const Contacts: React.FC = () => {
           instituicao: normalizedRow['instituicao'] || normalizedRow['empresa'] || normalizedRow['organization'] || ''
         };
       }).filter(r => {
-        // Basic validation: must have some phone number
+        // Validação: deve ter telefone E CPF válidos
         const hasPhone = r.telefone && r.telefone.replace(/\D/g, '').length > 5;
+        const hasCpf = r.cpf && r.cpf.replace(/\D/g, '').length === 11;
+
         if (!hasPhone) console.warn('Skipping row without valid phone:', r);
-        return hasPhone;
+        if (!hasCpf) console.warn('Skipping row without valid CPF (11 digits):', r);
+
+        return hasPhone && hasCpf;
       });
 
       console.log('Dados formatados para envio:', formattedData.length);
 
-      if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado. Verifique se as colunas 'telefone' e 'nome' existem no arquivo.");
+      if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado. Verifique se as colunas 'telefone', 'nome' e 'cpf' existem e são válidas.");
 
       await supabaseService.importContacts(importCampaignId, formattedData);
 
@@ -240,7 +291,11 @@ export const Contacts: React.FC = () => {
       fetchData();
     } catch (e: any) {
       console.error('Erro no submit de importação:', e);
-      alert(`Erro na importação: ${e.message}`);
+      if (e.message?.includes('duplicate') || e.message?.includes('idx_contacts_cpf_telefone')) {
+        alert('Erro: Alguns contatos possuem a mesma combinação CPF+Telefone já cadastrada.');
+      } else {
+        alert(`Erro na importação: ${e.message}`);
+      }
     } finally {
       setImporting(false);
     }
@@ -427,9 +482,11 @@ export const Contacts: React.FC = () => {
           />
 
           <Input
-            label="CPF (Opcional)"
+            label="CPF *"
+            placeholder="000.000.000-00 ou 00000000000"
             value={createForm.cpf}
             onChange={(e) => setCreateForm({ ...createForm, cpf: e.target.value })}
+            required
           />
 
           <Input
@@ -483,7 +540,7 @@ export const Contacts: React.FC = () => {
                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
                   <Upload className="w-8 h-8 mb-3 text-slate-400" />
                   <p className="text-sm text-slate-500 dark:text-slate-400"><span className="font-semibold">Clique para enviar</span> ou arraste</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">XLSX ou CSV (Colunas: nome, telefone, cpf)</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">XLSX ou CSV (Colunas obrigatórias: nome, telefone, cpf)</p>
                 </div>
                 <input type="file" className="hidden" accept=".csv, .xlsx, .xls" onChange={handleFileChange} />
               </label>
@@ -523,6 +580,15 @@ export const Contacts: React.FC = () => {
             value={editForm.name}
             onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
           />
+
+          <Input
+            label="CPF *"
+            placeholder="000.000.000-00 ou 00000000000"
+            value={editForm.cpf}
+            onChange={(e) => setEditForm({ ...editForm, cpf: e.target.value })}
+            required
+          />
+
           <Input
             label="Telefone (com DDD)"
             value={editForm.phone}

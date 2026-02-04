@@ -332,11 +332,32 @@ export const supabaseService = {
     }
   },
 
-  async updateContact(contactId: string, data: { nome?: string; telefone?: string }): Promise<void> {
+  async updateContact(contactId: string, data: { nome?: string; telefone?: string; cpf?: string }): Promise<void> {
     // Note: This updates the PERSON (contacts table), not just the campaign link
+
+    // Normalize data before updating
+    const normalizedData: any = {};
+
+    if (data.nome !== undefined) {
+      normalizedData.nome = data.nome;
+    }
+
+    if (data.telefone !== undefined) {
+      // Normalize phone: remove non-digits and add +55 if needed
+      const cleanNums = data.telefone.replace(/\D/g, '');
+      normalizedData.telefone = (cleanNums.length === 12 || cleanNums.length === 13)
+        ? `+${cleanNums}`
+        : `+55${cleanNums}`;
+    }
+
+    if (data.cpf !== undefined) {
+      // Normalize CPF: remove non-digits
+      normalizedData.cpf = data.cpf.replace(/\D/g, '');
+    }
+
     const { error } = await supabase
       .from('contacts')
-      .update(data)
+      .update(normalizedData)
       .eq('id', contactId);
 
     if (error) {
