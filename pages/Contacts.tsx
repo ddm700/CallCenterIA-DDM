@@ -9,9 +9,6 @@ import * as XLSX from 'xlsx';
 
 export const Contacts: React.FC = () => {
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(25); // Show 25 per page
   const [campaignsList, setCampaignsList] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -45,22 +42,14 @@ export const Contacts: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCampaignFilter, setSelectedCampaignFilter] = useState('all');
 
-  const fetchData = async (page = 1) => {
+  const fetchData = async () => {
     setLoading(true);
     try {
-      // Pass filters if needed, currently handling search client-side for simplicity 
-      // but ideally should be server-side for true pagination of large sets.
-      // For 322 records, fetching partials is fine, but filtering locally on partial data is weird.
-      // Ideally we fetch filtered data from DB. 
-      // For now, let's fetch the page.
-
-      const [contactsResponse, campaignsData] = await Promise.all([
-        supabaseService.getContacts(page, itemsPerPage, { searchTerm }),
+      const [contactsData, campaignsData] = await Promise.all([
+        supabaseService.getContacts(),
         supabaseService.getCampaigns()
       ]);
-
-      setContacts(contactsResponse.data);
-      setTotalCount(contactsResponse.count);
+      setContacts(contactsData);
       setCampaignsList(campaignsData);
     } catch (error: any) {
       console.error(error);
@@ -71,8 +60,8 @@ export const Contacts: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchData(currentPage);
-  }, [currentPage]); // Refetch when page changes
+    fetchData();
+  }, []);
 
   // --- ACTIONS ---
 
@@ -108,52 +97,13 @@ export const Contacts: React.FC = () => {
     }
   };
 
-  const handleDeleteContact = async (id: string, contactName: string) => {
-    // First confirmation: What type of deletion?
-    const deleteType = confirm(
-      `ATENÇÃO: Como deseja deletar "${contactName}"?\n\n` +
-      `✅ OK = DELETAR PERMANENTEMENTE do banco de dados (não poderá ser recuperado)\n` +
-      `❌ CANCELAR = Apenas remover desta campanha (contato permanece no banco)`
-    );
-
-    // If user cancels, ask if they want to just remove from campaign
-    if (!deleteType) {
-      const removeFromCampaign = confirm(
-        `Deseja apenas REMOVER "${contactName}" desta campanha?\n\n` +
-        `(O contato permanecerá no banco de dados e poderá ser adicionado a outras campanhas)`
-      );
-
-      if (!removeFromCampaign) return; // User cancelled everything
-
-      // Remove from campaign only
-      try {
-        await supabaseService.deleteContact(id, false);
-        setContacts(prev => prev.filter(c => c.id !== id));
-        setTotalCount(prev => Math.max(0, prev - 1));
-        alert('Contato removido da campanha com sucesso!');
-      } catch (e) {
-        alert('Erro ao remover contato da campanha.');
-      }
-      return;
-    }
-
-    // Permanent deletion confirmed
-    const finalConfirm = confirm(
-      `⚠️ CONFIRMAÇÃO FINAL ⚠️\n\n` +
-      `Você está prestes a DELETAR PERMANENTEMENTE "${contactName}" do banco de dados.\n\n` +
-      `Esta ação NÃO PODE ser desfeita!\n\n` +
-      `Deseja continuar?`
-    );
-
-    if (!finalConfirm) return;
-
+  const handleDeleteContact = async (id: string) => {
+    if (!confirm('Tem certeza que deseja remover este contato da campanha?')) return;
     try {
-      await supabaseService.deleteContact(id, true);
+      await supabaseService.deleteContact(id);
       setContacts(prev => prev.filter(c => c.id !== id));
-      setTotalCount(prev => Math.max(0, prev - 1));
-      alert('Contato deletado permanentemente do banco de dados!');
     } catch (e) {
-      alert('Erro ao deletar contato permanentemente.');
+      alert('Erro ao excluir contato.');
     }
   };
 
@@ -176,64 +126,6 @@ export const Contacts: React.FC = () => {
 
     setCreating(true);
     try {
-      let contactIdToReplace: string | null = null;
-      let shouldReplaceContact = false;
-
-      // 1. PRIORITY CHECK: CPF Duplicate (if CPF provided)
-      if (createForm.cpf && createForm.cpf.trim()) {
-        const existingByCpf = await supabaseService.getContactByCpf(createForm.cpf);
-
-        if (existingByCpf) {
-          const replaceConfirm = confirm(
-            `⚠️ CPF DUPLICADO DETECTADO ⚠️\n\n` +
-            `O CPF ${createForm.cpf} já pertence a:\n` +
-            `Nome: ${existingByCpf.nome}\n` +
-            `Telefone: ${existingByCpf.telefone}\n\n` +
-            `✅ OK = SUBSTITUIR completamente o contato anterior (dados antigos serão perdidos)\n` +
-            `❌ CANCELAR = Abortar operação`
-          );
-
-          if (!replaceConfirm) {
-            setCreating(false);
-            return;
-          }
-
-          // User confirmed replacement
-          shouldReplaceContact = true;
-          contactIdToReplace = existingByCpf.id;
-        }
-      }
-
-      // 2. Secondary Check: Phone Duplicate (only if not replacing by CPF)
-      if (!shouldReplaceContact) {
-        const existingByPhone = await supabaseService.getContactByPhone(createForm.phone);
-
-        if (existingByPhone) {
-          const updateConfirm = confirm(
-            `O número ${createForm.phone} já pertence ao contato "${existingByPhone.nome}".\n\n` +
-            `Deseja ATUALIZAR este contato com os novos dados e adicioná-lo à campanha?\n` +
-            `(Cancelar para abortar operação)`
-          );
-
-          if (!updateConfirm) {
-            setCreating(false);
-            return;
-          }
-
-          // Update existing contact
-          await supabaseService.updateContact(existingByPhone.id, {
-            nome: createForm.name,
-            telefone: createForm.phone
-          });
-        }
-      }
-
-      // 3. If replacing contact, delete old one completely first
-      if (shouldReplaceContact && contactIdToReplace) {
-        await supabaseService.permanentlyDeleteContact(contactIdToReplace);
-      }
-
-      // 4. Create/Import the new contact
       const contactData = [{
         nome: createForm.name,
         cpf: createForm.cpf,
@@ -243,14 +135,10 @@ export const Contacts: React.FC = () => {
 
       await supabaseService.importContacts(createForm.campaignId, contactData);
 
-      const successMessage = shouldReplaceContact
-        ? 'Contato anterior substituído com sucesso!'
-        : 'Contato criado com sucesso!';
-
-      alert(successMessage);
+      alert('Contato criado com sucesso!');
       setIsCreateOpen(false);
       setCreateForm({ name: '', cpf: '', phone: '', institution: '', campaignId: '' });
-      fetchData(currentPage);
+      fetchData();
     } catch (e: any) {
       console.error(e);
       // Mensagem de erro específica para violação de constraint única
@@ -394,28 +282,13 @@ export const Contacts: React.FC = () => {
 
       if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado. Verifique se as colunas 'telefone', 'nome' e 'cpf' existem e são válidas.");
 
-      const result = await supabaseService.importContacts(importCampaignId, formattedData);
+      await supabaseService.importContacts(importCampaignId, formattedData);
 
-      // Build success message with details
-      let message = `✅ Importação Concluída!\n\n`;
-      message += `📥 Importados: ${result.imported} contatos\n`;
-
-      if (result.skipped > 0) {
-        message += `⚠️ Ignorados: ${result.skipped} contatos (CPF duplicado)\n\n`;
-        message += `CPFs duplicados encontrados:\n`;
-        result.duplicateCpfs.slice(0, 5).forEach(cpf => {
-          message += `• ${cpf}\n`;
-        });
-        if (result.duplicateCpfs.length > 5) {
-          message += `... e mais ${result.duplicateCpfs.length - 5} CPFs duplicados`;
-        }
-      }
-
-      alert(message);
+      alert(`Sucesso! ${formattedData.length} contatos foram enviados para processamento.`);
       setIsImportOpen(false);
       setImportFile(null);
       setImportPreview([]);
-      fetchData(currentPage);
+      fetchData();
     } catch (e: any) {
       console.error('Erro no submit de importação:', e);
       if (e.message?.includes('duplicate') || e.message?.includes('idx_contacts_cpf_telefone')) {
@@ -431,8 +304,6 @@ export const Contacts: React.FC = () => {
   // --- RENDER ---
 
   const filteredContacts = contacts.filter(contact => {
-    // Note: Since we are paginating on server, client-side filtering only filters the current page.
-    // Ideally, search should be triggered via API.
     const matchesSearch = contact.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       contact.phone.includes(searchTerm) ||
       contact.cpf.includes(searchTerm);
@@ -440,8 +311,6 @@ export const Contacts: React.FC = () => {
 
     return matchesSearch && matchesCampaign;
   });
-
-  const totalPages = Math.ceil(totalCount / itemsPerPage);
 
   return (
     <div className="space-y-6">
@@ -487,9 +356,7 @@ export const Contacts: React.FC = () => {
       <Card className="p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Lista de Contatos</h3>
-          <div className="flex gap-2 items-center">
-            <span className="text-sm text-slate-500">{totalCount} registros totais</span>
-          </div>
+          <span className="text-sm text-slate-500">{filteredContacts.length} registros</span>
         </div>
 
         {loading ? (
@@ -570,7 +437,7 @@ export const Contacts: React.FC = () => {
 
                         {/* Delete Button */}
                         <button
-                          onClick={() => handleDeleteContact(contact.id, contact.name)}
+                          onClick={() => handleDeleteContact(contact.id)}
                           className="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-slate-400 hover:text-red-600 transition-colors"
                           title="Remover Contato"
                         >
@@ -585,29 +452,6 @@ export const Contacts: React.FC = () => {
           </div>
         )}
       </Card>
-
-      {/* Pagination Controls */}
-      <div className="flex items-center justify-between px-4">
-        <div className="text-sm text-slate-500">
-          Página {currentPage} de {totalPages || 1} ({totalCount} registros)
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-            disabled={currentPage === 1}
-          >
-            Anterior
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-            disabled={currentPage >= totalPages}
-          >
-            Próxima
-          </Button>
-        </div>
-      </div>
 
       {/* CREATE MODAL */}
       <Modal

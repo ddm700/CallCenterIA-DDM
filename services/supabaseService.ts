@@ -138,8 +138,8 @@ export const supabaseService = {
 
   // --- CONTACTS ---
 
-  async getContacts(page: number = 1, limit: number = 50, filters?: any): Promise<{ data: Contact[], count: number }> {
-    let query = supabase
+  async getContacts(): Promise<Contact[]> {
+    const { data, error } = await supabase
       .from('campaign_contacts')
       .select(`
         id,
@@ -157,30 +157,16 @@ export const supabaseService = {
           id,
           nome
         )
-      `, { count: 'exact' });
-
-    // Apply filters if provided
-    if (filters?.searchTerm) {
-      // This is tricky with joined tables in Supabase.
-      // We'll filter on the client side since complex joins + ilike are hard, 
-      // BUT for performance on large datasets, we should eventually move to RPCS or stricter filtering.
-      // For now, let's just paginate the campaign_contacts
-    }
-
-    // Pagination
-    const from = (page - 1) * limit;
-    const to = from + limit - 1;
-
-    const { data, error, count } = await query
+      `)
       .order('created_at', { ascending: false })
-      .range(from, to);
+      .limit(100);
 
     if (error) {
       console.error('Error fetching contacts:', error);
       throw error;
     }
 
-    const formattedData = (data || []).map((row: any) => ({
+    return (data || []).map((row: any) => ({
       id: row.id,
       contactId: row.contact_id,
       name: row.contacts?.nome || 'Sem Nome',
@@ -193,52 +179,6 @@ export const supabaseService = {
       lastAttempt: row.ultima_tentativa ? new Date(row.ultima_tentativa).toLocaleString('pt-BR') : undefined,
       phone: row.contacts?.telefone || ''
     }));
-
-    return { data: formattedData, count: count || 0 };
-  },
-
-  async getContactByPhone(phone: string): Promise<any | null> {
-    // Normalize phone for search (remove non-digits)
-    const cleanPhone = phone.replace(/\D/g, '');
-
-    // Search with exact match or similar logic
-    // We try to match variations: clean, +55+clean
-    const possiblePhones = [cleanPhone, `+${cleanPhone}`, `+55${cleanPhone}`, phone];
-
-    const { data, error } = await supabase
-      .from('contacts')
-      .select('*')
-      .in('telefone', possiblePhones)
-      .limit(1)
-      .single();
-
-    if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned"
-      console.error('Error searching contact by phone:', error);
-      return null;
-    }
-
-    return data;
-  },
-
-  async getContactByCpf(cpf: string): Promise<any | null> {
-    // Normalize CPF for search (remove non-digits)
-    const cleanCpf = cpf.replace(/\D/g, '');
-
-    if (!cleanCpf) return null;
-
-    const { data, error } = await supabase
-      .from('contacts')
-      .select('*')
-      .eq('cpf', cleanCpf)
-      .limit(1)
-      .single();
-
-    if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned"
-      console.error('Error searching contact by CPF:', error);
-      return null;
-    }
-
-    return data;
   },
 
   async checkExistingCpfs(cpfs: string[]): Promise<string[]> {
@@ -260,10 +200,10 @@ export const supabaseService = {
     return data.map((d: any) => d.cpf);
   },
 
-  async importContacts(campaignId: string, contactsData: { nome: string; cpf: string; telefone: string; instituicao: string }[]): Promise<{ imported: number; skipped: number; duplicateCpfs: string[] }> {
-    if (!contactsData || contactsData.length === 0) return { imported: 0, skipped: 0, duplicateCpfs: [] };
+  async importContacts(campaignId: string, contactsData: { nome: string; cpf: string; telefone: string; instituicao: string }[]): Promise<void> {
+    if (!contactsData || contactsData.length === 0) return;
 
-    // 1. Prepare Payload with normalized phones and CPFs
+    // 1. Prepare Payload with normalized phones
     const contactsPayload = contactsData.map(c => {
       const cleanNums = c.telefone.replace(/\D/g, '');
       const normalizedPhone = (cleanNums.length === 12 || cleanNums.length === 13)
@@ -278,34 +218,8 @@ export const supabaseService = {
       };
     });
 
-    // 2. Check for CPF duplicates FIRST (priority check)
-    const allCpfs = contactsPayload.map(c => c.cpf).filter(Boolean);
-    const duplicateCpfs: string[] = [];
-
-    if (allCpfs.length > 0) {
-      const { data: existingByCpf } = await supabase
-        .from('contacts')
-        .select('cpf')
-        .in('cpf', allCpfs);
-
-      if (existingByCpf && existingByCpf.length > 0) {
-        existingByCpf.forEach((c: any) => duplicateCpfs.push(c.cpf));
-      }
-    }
-
-    // 3. Filter out contacts with duplicate CPFs
-    const validContactsPayload = contactsPayload.filter(c => {
-      if (c.cpf && duplicateCpfs.includes(c.cpf)) {
-        console.warn(`Skipping contact with duplicate CPF: ${c.cpf} (${c.nome})`);
-        return false;
-      }
-      return true;
-    });
-
-    const skippedCount = contactsPayload.length - validContactsPayload.length;
-
-    // 4. Check for existing contacts by phone (for linking)
-    const allPhones = validContactsPayload.map(c => c.telefone);
+    // 2. Manual Check for Existing Contacts (to avoid ON CONFLICT error if no unique constraint exists)
+    const allPhones = contactsPayload.map(c => c.telefone);
 
     // Fetch existing contacts with these phones
     const { data: existingContacts, error: fetchError } = await supabase
@@ -323,10 +237,10 @@ export const supabaseService = {
       existingContacts.forEach((c: any) => existingPhoneMap.set(c.telefone, c.id));
     }
 
-    // 5. Filter New Contacts to Insert
-    const newContactsToInsert = validContactsPayload.filter(c => !existingPhoneMap.has(c.telefone));
+    // 3. Filter New Contacts to Insert
+    const newContactsToInsert = contactsPayload.filter(c => !existingPhoneMap.has(c.telefone));
 
-    // 6. Insert New Contacts
+    // 4. Insert New Contacts
     if (newContactsToInsert.length > 0) {
       const { data: insertedNew, error: insertError } = await supabase
         .from('contacts')
@@ -344,12 +258,12 @@ export const supabaseService = {
       }
     }
 
-    // 7. Link ALL contacts (existing + new) to Campaign
+    // 5. Link ALL contacts (existing + new) to Campaign
     // We use a Set to ensure we don't try to link the same ID twice in one go
     const campaignContactsPayload = [];
     const processedIds = new Set<string>();
 
-    for (const inputContact of validContactsPayload) {
+    for (const inputContact of contactsPayload) {
       const contactId = existingPhoneMap.get(inputContact.telefone);
 
       if (contactId && !processedIds.has(contactId)) {
@@ -386,12 +300,6 @@ export const supabaseService = {
         }
       }
     }
-
-    return {
-      imported: validContactsPayload.length,
-      skipped: skippedCount,
-      duplicateCpfs
-    };
   },
 
   // --- ACTIONS (New) ---
@@ -412,60 +320,14 @@ export const supabaseService = {
     }
   },
 
-  async deleteContact(campaignContactId: string, deletePermanently: boolean = false): Promise<void> {
-    // First, get the contact_id if we need to delete permanently
-    let contactIdToDelete: string | null = null;
-
-    if (deletePermanently) {
-      const { data } = await supabase
-        .from('campaign_contacts')
-        .select('contact_id')
-        .eq('id', campaignContactId)
-        .single();
-
-      contactIdToDelete = data?.contact_id || null;
-    }
-
-    // Delete from campaign_contacts (the link)
+  async deleteContact(campaignContactId: string): Promise<void> {
     const { error } = await supabase
       .from('campaign_contacts')
       .delete()
       .eq('id', campaignContactId);
 
     if (error) {
-      console.error('Error deleting contact from campaign:', error);
-      throw error;
-    }
-
-    // If permanent deletion requested, also delete from contacts table
-    if (deletePermanently && contactIdToDelete) {
-      const { error: deletePersonError } = await supabase
-        .from('contacts')
-        .delete()
-        .eq('id', contactIdToDelete);
-
-      if (deletePersonError) {
-        console.error('Error permanently deleting contact:', deletePersonError);
-        throw deletePersonError;
-      }
-    }
-  },
-
-  async permanentlyDeleteContact(contactId: string): Promise<void> {
-    // Delete all campaign links first
-    await supabase
-      .from('campaign_contacts')
-      .delete()
-      .eq('contact_id', contactId);
-
-    // Then delete the person record
-    const { error } = await supabase
-      .from('contacts')
-      .delete()
-      .eq('id', contactId);
-
-    if (error) {
-      console.error('Error permanently deleting contact:', error);
+      console.error('Error deleting contact:', error);
       throw error;
     }
   },
