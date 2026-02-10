@@ -311,9 +311,9 @@ Deno.serve(async (req) => {
             structured_next_steps: structured_next_steps,
             structured_emotions_objections: structured_emotions_objections,
             metadata_raw: payload, // Salvar payload completo para debug
-            status: call.endedReason === 'assistant-ended-call' || call.endedReason === 'customer-ended-call'
-                ? 'completed'
-                : call.endedReason,
+            status: ['assistant-ended-call', 'customer-ended-call', 'Sem Débito'].includes(call.endedReason)
+                        ? 'completed'
+                        : 'failed',
         };
 
         console.log('Atualizando chamada:', existingCall.id, updateData);
