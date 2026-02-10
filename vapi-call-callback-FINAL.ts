@@ -220,7 +220,7 @@ Deno.serve(async (req) => {
                     vapi_call_id: call.id,
                     campaign_contact_id: metadata?.campaignContactId || null,
                     contact_phone_id: metadata?.phoneId || null,
-                    status: 'completed',
+                    status: 'queued',
                 })
                 .select('id, campaign_contact_id')
                 .maybeSingle();
