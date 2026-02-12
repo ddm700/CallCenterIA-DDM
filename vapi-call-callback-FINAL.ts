@@ -284,6 +284,15 @@ Deno.serve(async (req) => {
                 successEvaluation = String(call.analysis.successEvaluation);
             }
         }
+        const completedEndings = [
+            'assistant-ended-call',
+            'customer-ended-call',
+            'customer-did-not-answer',
+            'customer-busy',
+            'voicemail',
+            'silence-timed-out'
+        ];
+
 
         // 8. Preparar dados para atualização
         const updateData = {
@@ -311,7 +320,7 @@ Deno.serve(async (req) => {
             structured_next_steps: structured_next_steps,
             structured_emotions_objections: structured_emotions_objections,
             metadata_raw: payload, // Salvar payload completo para debug
-            status: call.endedReason === 'assistant-ended-call' || call.endedReason === 'customer-ended-call'
+            status: completedEndings.includes(call.endedReason)
                 ? 'completed'
                 : call.endedReason,
         };
