@@ -270,9 +270,7 @@ export const Calls: React.FC = () => {
                   <th className="px-5 py-3 text-center">Duração</th>
                   <th className="px-5 py-3">Status</th>
                   <th className="px-5 py-3">Motivo</th>
-                  {/*
-                    <th className="px-5 py-3 text-center">Sucesso</th>
-                  */}
+                  <th className="px-5 py-3 text-center">Sucesso</th>
                   <th className="px-5 py-3 text-right">Custo</th>
                   <th className="px-5 py-3 text-right last:pr-6">Ações</th>
                 </tr>
@@ -294,7 +292,6 @@ export const Calls: React.FC = () => {
                       </span>
                     </td>
                     <td className="px-5 py-3.5 text-xs text-slate-500 dark:text-slate-400 truncate max-w-[150px]" title={call.reason}>{call.reason}</td>
-                    {/*
                     <td className="px-5 py-3.5 text-center">
                       {call.success ? (
                         <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400">
@@ -306,7 +303,6 @@ export const Calls: React.FC = () => {
                         </div>
                       )}
                     </td>
-                    */}
                     <td className="px-5 py-3.5 font-mono text-xs text-right text-slate-700 dark:text-slate-300">R$ {call.cost.toFixed(2)}</td>
                     <td className="px-5 py-3.5 text-right last:pr-6">
                       <div className="flex items-center justify-end gap-1">
@@ -353,8 +349,8 @@ export const Calls: React.FC = () => {
                     key={size}
                     onClick={() => handlePageSizeChange(size)}
                     className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${pageSize === size
-                        ? 'bg-primary text-white shadow-sm'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
                       }`}
                   >
                     {size}
