@@ -32,6 +32,7 @@ export const Contacts: React.FC = () => {
   const [importCampaignId, setImportCampaignId] = useState('');
   const [importPreview, setImportPreview] = useState<any[]>([]);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ pct: number; label: string } | null>(null);
 
   // Edit Modal State
   const [isEditOpen, setIsEditOpen] = useState(false);
@@ -41,6 +42,17 @@ export const Contacts: React.FC = () => {
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCampaignFilter, setSelectedCampaignFilter] = useState('all');
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const PAGE_SIZE_OPTIONS = [50, 100, 500, 1000];
+
+  const handleFilterChange = <T,>(setter: React.Dispatch<React.SetStateAction<T>>) =>
+    (value: T) => {
+      setter(value);
+      setCurrentPage(1);
+    };
 
   const fetchData = async () => {
     setLoading(true);
@@ -242,6 +254,7 @@ export const Contacts: React.FC = () => {
     if (!importPreview || importPreview.length === 0) return alert('O arquivo está vazio ou não pôde ser lido. Verifique o formato.');
 
     setImporting(true);
+    setImportProgress({ pct: 0, label: 'Iniciando...' });
     try {
       // Map excel columns to expected format
       // Expected: nome, cpf, telefone, instituicao
@@ -282,15 +295,19 @@ export const Contacts: React.FC = () => {
 
       if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado. Verifique se as colunas 'telefone', 'nome' e 'cpf' existem e são válidas.");
 
-      await supabaseService.importContacts(importCampaignId, formattedData);
+      await supabaseService.importContacts(importCampaignId, formattedData, (pct, label) => {
+        setImportProgress({ pct, label });
+      });
 
       alert(`Sucesso! ${formattedData.length} contatos foram enviados para processamento.`);
       setIsImportOpen(false);
       setImportFile(null);
       setImportPreview([]);
+      setImportProgress(null);
       fetchData();
     } catch (e: any) {
       console.error('Erro no submit de importação:', e);
+      setImportProgress(null);
       if (e.message?.includes('duplicate') || e.message?.includes('idx_contacts_cpf_telefone')) {
         alert('Erro: Alguns contatos possuem a mesma combinação CPF+Telefone já cadastrada.');
       } else {
@@ -311,6 +328,13 @@ export const Contacts: React.FC = () => {
 
     return matchesSearch && matchesCampaign;
   });
+
+  // Pagination derived values
+  const totalPages = Math.max(1, Math.ceil(filteredContacts.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedContacts = filteredContacts.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const rangeStart = filteredContacts.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const rangeEnd = Math.min(safePage * pageSize, filteredContacts.length);
 
   return (
     <div className="space-y-6">
@@ -334,14 +358,14 @@ export const Contacts: React.FC = () => {
               icon={Search}
               placeholder="Buscar por nome, telefone ou CPF..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => handleFilterChange(setSearchTerm)(e.target.value)}
             />
           </div>
           <div>
             <select
               className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent"
               value={selectedCampaignFilter}
-              onChange={(e) => setSelectedCampaignFilter(e.target.value)}
+              onChange={(e) => handleFilterChange(setSelectedCampaignFilter)(e.target.value)}
             >
               <option value="all">Todas as Campanhas</option>
               {campaignsList.map(c => (
@@ -382,7 +406,7 @@ export const Contacts: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                {filteredContacts.map((contact) => (
+                {paginatedContacts.map((contact) => (
                   <tr key={contact.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900 dark:text-white">{contact.name}</div>
@@ -449,6 +473,57 @@ export const Contacts: React.FC = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination Footer */}
+        {!loading && filteredContacts.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3">
+            {/* Left: range info */}
+            <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+              Exibindo <span className="font-semibold text-slate-700 dark:text-slate-300">{rangeStart}–{rangeEnd}</span> de{' '}
+              <span className="font-semibold text-slate-700 dark:text-slate-300">{filteredContacts.length}</span> registros
+            </p>
+
+            {/* Center: page size selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 dark:text-slate-400">Linhas por página:</span>
+              <div className="flex items-center gap-1">
+                {PAGE_SIZE_OPTIONS.map(size => (
+                  <button
+                    key={size}
+                    onClick={() => { setPageSize(size); setCurrentPage(1); }}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${pageSize === size
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: prev / page indicator / next */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={safePage <= 1}
+                className="px-3 py-1 rounded text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                ← Anterior
+              </button>
+              <span className="text-xs font-mono text-slate-600 dark:text-slate-400 min-w-[70px] text-center">
+                {safePage} / {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={safePage >= totalPages}
+                className="px-3 py-1 rounded text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                Próxima →
+              </button>
+            </div>
           </div>
         )}
       </Card>
@@ -554,7 +629,7 @@ export const Contacts: React.FC = () => {
           </div>
 
           <div className="flex justify-end gap-3 mt-4">
-            <Button variant="secondary" onClick={() => setIsImportOpen(false)}>Cancelar</Button>
+            <Button variant="secondary" onClick={() => setIsImportOpen(false)} disabled={importing}>Cancelar</Button>
             <Button onClick={handleImportSubmit} disabled={!importFile || !importCampaignId || importing}>
               {importing ? (
                 <>
@@ -564,8 +639,25 @@ export const Contacts: React.FC = () => {
               ) : 'Processar Importação'}
             </Button>
           </div>
+
+          {/* Progress bar — shown during import */}
+          {importing && importProgress && (
+            <div className="mt-4 space-y-1.5">
+              <div className="flex justify-between items-center text-xs text-slate-500 dark:text-slate-400">
+                <span>{importProgress.label}</span>
+                <span className="font-mono font-semibold text-primary">{importProgress.pct}%</span>
+              </div>
+              <div className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${importProgress.pct}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
 
       {/* EDIT MODAL */}
       <Modal

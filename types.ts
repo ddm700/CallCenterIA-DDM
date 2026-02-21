@@ -77,6 +77,10 @@ export interface Call {
   structured_purpose?: string;
   structured_main_points?: string;
   analysis?: any; // JSON object from VAPI containing detailed extraction
+  // Raw data from DB
+  metadata_raw?: any;       // full JSON from metadata_raw column
+  raw_summary?: string;     // extracted from metadata_raw.analysis.summary or metadata_raw.summary
+  raw_success_evaluation?: string; // extracted from metadata_raw.analysis.successEvaluation
 }
 
 export interface Metric {

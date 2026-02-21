@@ -19,6 +19,11 @@ export const Calls: React.FC = () => {
   const [selectedCall, setSelectedCall] = useState<Call | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const PAGE_SIZE_OPTIONS = [50, 100, 500, 1000];
+
   // Filter Data
   const [allCampaignNames, setAllCampaignNames] = useState<string[]>([]);
 
@@ -74,6 +79,24 @@ export const Calls: React.FC = () => {
 
     return matchCampaign && matchClient && matchStatus && matchDate;
   });
+
+  // 3. Pagination derived values
+  const totalPages = Math.max(1, Math.ceil(filteredCalls.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedCalls = filteredCalls.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const rangeStart = filteredCalls.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const rangeEnd = Math.min(safePage * pageSize, filteredCalls.length);
+
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size);
+    setCurrentPage(1);
+  };
+
+  const handleFilterChange = (setter: React.Dispatch<React.SetStateAction<string>>) =>
+    (value: string) => {
+      setter(value);
+      setCurrentPage(1);
+    };
 
   // --- KPIs Calculation ---
   const kpiTotalToday = calls.filter(c => {
@@ -177,7 +200,7 @@ export const Calls: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <select
             value={selectedCampaign}
-            onChange={(e) => setSelectedCampaign(e.target.value)}
+            onChange={(e) => handleFilterChange(setSelectedCampaign)(e.target.value)}
             className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
           >
             {uniqueCampaigns.map(c => <option key={c} value={c}>{c}</option>)}
@@ -185,7 +208,7 @@ export const Calls: React.FC = () => {
 
           <select
             value={selectedClient}
-            onChange={(e) => setSelectedClient(e.target.value)}
+            onChange={(e) => handleFilterChange(setSelectedClient)(e.target.value)}
             className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
           >
             {uniqueClients.map(c => <option key={c} value={c}>{c}</option>)}
@@ -193,7 +216,7 @@ export const Calls: React.FC = () => {
 
           <select
             value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
+            onChange={(e) => handleFilterChange(setSelectedStatus)(e.target.value)}
             className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
           >
             {uniqueStatus.map(s => <option key={s} value={s}>{s}</option>)}
@@ -201,7 +224,7 @@ export const Calls: React.FC = () => {
 
           <select
             value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
+            onChange={(e) => handleFilterChange(setSelectedDate)(e.target.value)}
             className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
           >
             {uniqueDates.map(d => <option key={d} value={d}>{d}</option>)}
@@ -255,7 +278,7 @@ export const Calls: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredCalls.map((call) => (
+                {paginatedCalls.map((call) => (
                   <tr key={call.id} className="group hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="px-5 py-3.5 first:pl-6 font-mono text-xs text-slate-600 dark:text-slate-400">{call.date}</td>
                     <td className="px-5 py-3.5 font-medium text-slate-900 dark:text-white truncate max-w-[140px]" title={call.campaignName}>{call.campaignName}</td>
@@ -309,6 +332,57 @@ export const Calls: React.FC = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination Footer */}
+        {!loading && filteredCalls.length > 0 && (
+          <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+            {/* Left: range info */}
+            <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+              Exibindo <span className="font-semibold text-slate-700 dark:text-slate-300">{rangeStart}–{rangeEnd}</span> de{' '}
+              <span className="font-semibold text-slate-700 dark:text-slate-300">{filteredCalls.length}</span> registros
+            </p>
+
+            {/* Center: page size selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 dark:text-slate-400">Linhas por página:</span>
+              <div className="flex items-center gap-1">
+                {PAGE_SIZE_OPTIONS.map(size => (
+                  <button
+                    key={size}
+                    onClick={() => handlePageSizeChange(size)}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${pageSize === size
+                        ? 'bg-primary text-white shadow-sm'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: prev / page indicator / next */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={safePage <= 1}
+                className="px-3 py-1 rounded text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                ← Anterior
+              </button>
+              <span className="text-xs font-mono text-slate-600 dark:text-slate-400 min-w-[70px] text-center">
+                {safePage} / {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={safePage >= totalPages}
+                className="px-3 py-1 rounded text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                Próxima →
+              </button>
+            </div>
           </div>
         )}
       </div>
