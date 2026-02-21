@@ -14,6 +14,7 @@ export const Calls: React.FC = () => {
   const [selectedClient, setSelectedClient] = useState('Todos os Clientes');
   const [selectedStatus, setSelectedStatus] = useState('Todos os Status');
   const [selectedDate, setSelectedDate] = useState('Todas as Datas');
+  const [selectedSuccess, setSelectedSuccess] = useState('Todos');
 
   // Modal State
   const [selectedCall, setSelectedCall] = useState<Call | null>(null);
@@ -72,12 +73,16 @@ export const Calls: React.FC = () => {
     const matchCampaign = selectedCampaign === 'Todas as Campanhas' || call.campaignName === selectedCampaign;
     const matchClient = selectedClient === 'Todos os Clientes' || call.clientName === selectedClient;
     const matchStatus = selectedStatus === 'Todos os Status' || call.status === selectedStatus;
+    const matchSuccess =
+      selectedSuccess === 'Todos' ||
+      (selectedSuccess === 'Sucesso' && call.success === true) ||
+      (selectedSuccess === 'Sem Sucesso' && call.success === false);
 
     // Date matching
     const callDate = call.date.split(',')[0].trim();
     const matchDate = selectedDate === 'Todas as Datas' || callDate === selectedDate;
 
-    return matchCampaign && matchClient && matchStatus && matchDate;
+    return matchCampaign && matchClient && matchStatus && matchDate && matchSuccess;
   });
 
   // 3. Pagination derived values
@@ -197,7 +202,7 @@ export const Calls: React.FC = () => {
         <h2 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
           <Search className="w-4 h-4" /> Filtros Avançados
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <select
             value={selectedCampaign}
             onChange={(e) => handleFilterChange(setSelectedCampaign)(e.target.value)}
@@ -228,6 +233,17 @@ export const Calls: React.FC = () => {
             className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
           >
             {uniqueDates.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+
+          {/* Filtro de Sucesso */}
+          <select
+            value={selectedSuccess}
+            onChange={(e) => handleFilterChange(setSelectedSuccess)(e.target.value)}
+            className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-primary focus:border-primary transition-shadow cursor-pointer"
+          >
+            <option value="Todos">Todos os Resultados</option>
+            <option value="Sucesso">✓ Sucesso</option>
+            <option value="Sem Sucesso">✕ Sem Sucesso</option>
           </select>
         </div>
       </div>
