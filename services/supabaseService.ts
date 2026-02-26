@@ -200,6 +200,7 @@ export const supabaseService = {
     return data.map((d: any) => d.cpf);
   },
 
+  
   async importContacts(
     campaignId: string,
     contactsData: { nome: string; cpf: string; telefone: string; instituicao: string }[],
