@@ -298,8 +298,8 @@ export const Contacts: React.FC = () => {
       // adicionando uma flag para testar função de importao para processamento em EDGE FUNCTION
       const USE_EDGE_IMPORT = true;
 
-      console.log("FLAG EDGE:", USE_EDGE_IMPORT);
-      console.log("Chamando função EDGE agora...");
+      alert("FLAG EDGE: " + USE_EDGE_IMPORT);
+          alert("Chamando função EDGE agora...");
     
       // chamada da funcao importContacts2 que processa os dados no frontend e envia para uma edge function para processamento assíncrono, evitando timeouts e sobrecarga no backend
       if (USE_EDGE_IMPORT) {
