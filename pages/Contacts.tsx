@@ -295,9 +295,19 @@ export const Contacts: React.FC = () => {
 
       if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado. Verifique se as colunas 'telefone', 'nome' e 'cpf' existem e são válidas.");
 
-      await supabaseService.importContacts(importCampaignId, formattedData, (pct, label) => {
-        setImportProgress({ pct, label });
-      });
+      // adicionando uma flag para testar função de importao para processamento em EDGE FUNCTION
+      const USE_EDGE_IMPORT = true;
+
+      // chamada da funcao importContacts2 que processa os dados no frontend e envia para uma edge function para processamento assíncrono, evitando timeouts e sobrecarga no backend
+      if (USE_EDGE_IMPORT) {
+        await supabaseService.importContacts2(importCampaignId, formattedData, (pct, label) => {
+          setImportProgress({ pct, label });
+        });
+      } else {
+        await supabaseService.importContacts(importCampaignId, formattedData, (pct, label) => {
+          setImportProgress({ pct, label });
+        });
+      }
 
       alert(`Sucesso! ${formattedData.length} contatos foram enviados para processamento.`);
       setIsImportOpen(false);
