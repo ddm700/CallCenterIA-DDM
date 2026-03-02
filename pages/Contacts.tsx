@@ -309,7 +309,7 @@ export const Contacts: React.FC = () => {
       // chamada da funcao importContacts2 que processa os dados no frontend e envia para uma edge function para processamento assíncrono, evitando timeouts e sobrecarga no backend
       if (USE_EDGE_IMPORT) {
 
-        const BATCH_SIZE = 5000;
+        const BATCH_SIZE = 2000;
         const total = formattedData.length;
         const totalBatches = Math.ceil(total / BATCH_SIZE);
 
