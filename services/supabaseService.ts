@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabaseClient';
+import { apiRequest } from '../lib/apiClient';
 import { Campaign, Contact, Call } from '../types';
 
 export const supabaseService = {
@@ -200,7 +201,8 @@ export const supabaseService = {
     return data.map((d: any) => d.cpf);
   },
 
-  
+  /*
+  funcao que antes realizava o ETL no completo no frontend, manterei por precuacao comentada por enquanto
   async importContacts(
     campaignId: string,
     contactsData: { nome: string; cpf: string; telefone: string; instituicao: string }[],
@@ -290,6 +292,36 @@ export const supabaseService = {
     }
 
     report(100, 'Importação concluída!');
+  },
+  */
+
+  //redireciona payload para a Edge Function para o ETL no servidor
+  async importContacts(
+  campaignId: string,
+  contactsData: {
+    nome: string;
+    cpf: string;
+    telefone: string;
+    instituicao: string;
+  }[],
+  onProgress?: (percent: number, label: string) => void
+  ): Promise<any> {
+
+    if (!contactsData || contactsData.length === 0) return;
+
+    onProgress?.(5, 'Enviando dados para processamento...');
+
+    const data = await apiRequest<any>('/api/contacts/import', {
+      method: 'POST',
+      body: JSON.stringify({
+        campaignId,
+        contacts: contactsData
+      })
+    });
+
+    onProgress?.(100, 'Importação concluída.');
+
+    return data;
   },
 
   // --- ACTIONS (New) ---

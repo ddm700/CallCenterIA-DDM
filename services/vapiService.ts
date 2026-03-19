@@ -1,90 +1,73 @@
-import { supabase } from '../lib/supabaseClient';
-import { VapiAssistant, VapiPhoneNumber } from '../types';
+import { apiRequest } from '../lib/apiClient';
 import { getVapiSettings } from '../lib/settings';
+import { VapiAssistant, VapiPhoneNumber } from '../types';
+
+type VapiResourcesResponse = {
+  success: boolean;
+  assistants: VapiAssistant[];
+  phoneNumbers: VapiPhoneNumber[];
+};
+
+async function directAssistantsFallback(): Promise<VapiAssistant[]> {
+  try {
+    const settings = getVapiSettings();
+    if (!settings.apiKey) return [];
+
+    const response = await fetch('https://api.vapi.ai/assistant', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data) ? data : data.results || [];
+  } catch {
+    return [];
+  }
+}
+
+async function directPhonesFallback(): Promise<VapiPhoneNumber[]> {
+  try {
+    const settings = getVapiSettings();
+    if (!settings.apiKey) return [];
+
+    const response = await fetch('https://api.vapi.ai/phone-number', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data) ? data : data.results || [];
+  } catch {
+    return [];
+  }
+}
 
 export const vapiService = {
-  
-  /**
-   * Fetch all assistants via Edge Function with Fallback to Direct API
-   */
   async getAssistants(): Promise<VapiAssistant[]> {
-    // 1. Try Edge Function first
     try {
-      const { data, error } = await supabase.functions.invoke('get-vapi-resources', {
-        method: 'GET'
-      });
-
-      if (!error && data && data.success && Array.isArray(data.assistants)) {
-        return data.assistants;
-      }
-      console.warn('Edge function failed or returned empty for assistants, trying direct API fallback...');
+      const data = await apiRequest<VapiResourcesResponse>('/api/vapi/resources', { method: 'GET' });
+      if (data.success && Array.isArray(data.assistants)) return data.assistants;
     } catch (error) {
-      console.warn('Exception in Edge Function, trying fallback:', error);
+      console.warn('Backend VAPI resources falhou, usando fallback direto.', error);
     }
-
-    // 2. Fallback: Direct API Call
-    try {
-        const settings = getVapiSettings();
-        if (!settings.apiKey) return [];
-
-        const response = await fetch('https://api.vapi.ai/assistant', {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${settings.apiKey}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            // VAPI returns raw array or wrapped
-            return Array.isArray(data) ? data : (data.results || []);
-        }
-    } catch (e) {
-        console.error("Direct VAPI fetch failed:", e);
-    }
-
-    return [];
+    return directAssistantsFallback();
   },
 
-  /**
-   * Fetch all phone numbers via Edge Function with Fallback
-   */
   async getPhoneNumbers(): Promise<VapiPhoneNumber[]> {
-    // 1. Try Edge Function first
     try {
-      const { data, error } = await supabase.functions.invoke('get-vapi-resources', {
-        method: 'GET'
-      });
-
-      if (!error && data && data.success && Array.isArray(data.phoneNumbers)) {
-        return data.phoneNumbers;
-      }
+      const data = await apiRequest<VapiResourcesResponse>('/api/vapi/resources', { method: 'GET' });
+      if (data.success && Array.isArray(data.phoneNumbers)) return data.phoneNumbers;
     } catch (error) {
-       console.warn('Exception in Edge Function for phones, trying fallback:', error);
+      console.warn('Backend VAPI resources falhou, usando fallback direto.', error);
     }
-
-    // 2. Fallback: Direct API Call
-    try {
-        const settings = getVapiSettings();
-        if (!settings.apiKey) return [];
-
-        const response = await fetch('https://api.vapi.ai/phone-number', {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${settings.apiKey}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            return Array.isArray(data) ? data : (data.results || []);
-        }
-    } catch (e) {
-        console.error("Direct VAPI fetch failed:", e);
-    }
-
-    return [];
+    return directPhonesFallback();
   }
 };
