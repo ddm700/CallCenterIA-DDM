@@ -200,106 +200,131 @@ export const supabaseService = {
     return data.map((d: any) => d.cpf);
   },
 
-  async importContacts(campaignId: string, contactsData: { nome: string; cpf: string; telefone: string; instituicao: string }[]): Promise<void> {
+  /*
+  funcao que antes realizava o ETL no completo no frontend, manterei por precuacao comentada por enquanto
+  async importContacts(
+    campaignId: string,
+    contactsData: { nome: string; cpf: string; telefone: string; instituicao: string }[],
+    onProgress?: (percent: number, label: string) => void
+  ): Promise<void> {
     if (!contactsData || contactsData.length === 0) return;
 
-    // 1. Prepare Payload with normalized phones
+    const CHUNK = 500; // safe Supabase payload size
+    const report = (pct: number, label: string) => onProgress?.(Math.round(pct), label);
+
+    // Helper: split array into chunks
+    const chunkArray = <T>(arr: T[], size: number): T[][] =>
+      Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, (i + 1) * size));
+
+    // 1. Normalize phones
+    report(2, 'Normalizando dados...');
     const contactsPayload = contactsData.map(c => {
       const cleanNums = c.telefone.replace(/\D/g, '');
       const normalizedPhone = (cleanNums.length === 12 || cleanNums.length === 13)
         ? `+${cleanNums}`
-        : `+55${cleanNums}`; // Default to BR
-
-      return {
-        nome: c.nome,
-        cpf: c.cpf.replace(/\D/g, ''),
-        instituicao: c.instituicao,
-        telefone: normalizedPhone
-      };
+        : `+55${cleanNums}`;
+      return { nome: c.nome, cpf: c.cpf.replace(/\D/g, ''), instituicao: c.instituicao, telefone: normalizedPhone };
     });
 
-    // 2. Manual Check for Existing Contacts (to avoid ON CONFLICT error if no unique constraint exists)
+    // 2. Check existing phones in batches (Phase 0–25%)
+    report(5, 'Verificando duplicatas...');
     const allPhones = contactsPayload.map(c => c.telefone);
+    const phoneChunks = chunkArray(allPhones, CHUNK);
+    const existingPhoneMap = new Map<string, string>(); // phone -> id
 
-    // Fetch existing contacts with these phones
-    const { data: existingContacts, error: fetchError } = await supabase
-      .from('contacts')
-      .select('id, telefone')
-      .in('telefone', allPhones);
-
-    if (fetchError) {
-      console.error('Error fetching existing contacts:', fetchError);
-      throw fetchError;
-    }
-
-    const existingPhoneMap = new Map<string, string>(); // Phone -> ID
-    if (existingContacts) {
-      existingContacts.forEach((c: any) => existingPhoneMap.set(c.telefone, c.id));
-    }
-
-    // 3. Filter New Contacts to Insert
-    const newContactsToInsert = contactsPayload.filter(c => !existingPhoneMap.has(c.telefone));
-
-    // 4. Insert New Contacts
-    if (newContactsToInsert.length > 0) {
-      const { data: insertedNew, error: insertError } = await supabase
+    for (let i = 0; i < phoneChunks.length; i++) {
+      const { data, error } = await supabase
         .from('contacts')
-        .insert(newContactsToInsert)
+        .select('id, telefone')
+        .in('telefone', phoneChunks[i]);
+
+      if (error) throw error;
+      data?.forEach((c: any) => existingPhoneMap.set(c.telefone, c.id));
+      report(5 + ((i + 1) / phoneChunks.length) * 20, `Verificando duplicatas (lote ${i + 1}/${phoneChunks.length})...`);
+    }
+
+    // 3. Insert new contacts in batches (Phase 25–60%)
+    const newContacts = contactsPayload.filter(c => !existingPhoneMap.has(c.telefone));
+    const insertChunks = chunkArray(newContacts, CHUNK);
+
+    for (let i = 0; i < insertChunks.length; i++) {
+      const { data: inserted, error } = await supabase
+        .from('contacts')
+        .insert(insertChunks[i])
         .select('id, telefone');
 
-      if (insertError) {
-        console.error('Error inserting new contacts:', insertError);
-        throw insertError;
-      }
-
-      // Add new IDs to the map
-      if (insertedNew) {
-        insertedNew.forEach((c: any) => existingPhoneMap.set(c.telefone, c.id));
-      }
+      if (error) throw error;
+      inserted?.forEach((c: any) => existingPhoneMap.set(c.telefone, c.id));
+      report(25 + ((i + 1) / Math.max(insertChunks.length, 1)) * 35, `Inserindo novos contatos (lote ${i + 1}/${insertChunks.length})...`);
     }
 
-    // 5. Link ALL contacts (existing + new) to Campaign
-    // We use a Set to ensure we don't try to link the same ID twice in one go
-    const campaignContactsPayload = [];
+    if (insertChunks.length === 0) report(60, 'Nenhum contato novo para inserir.');
+
+    // 4. Build campaign_contacts payload
+    report(62, 'Vinculando à campanha...');
+    const campaignPayload: any[] = [];
     const processedIds = new Set<string>();
 
-    for (const inputContact of contactsPayload) {
-      const contactId = existingPhoneMap.get(inputContact.telefone);
-
+    for (const c of contactsPayload) {
+      const contactId = existingPhoneMap.get(c.telefone);
       if (contactId && !processedIds.has(contactId)) {
-        campaignContactsPayload.push({
-          campaign_id: campaignId,
-          contact_id: contactId,
-          status: 'pendente',
-          tentativas: 0
-        });
+        campaignPayload.push({ campaign_id: campaignId, contact_id: contactId, status: 'pendente', tentativas: 0 });
         processedIds.add(contactId);
       }
     }
 
-    if (campaignContactsPayload.length > 0) {
-      // Try UPSERT on campaign_contacts (usually has PK or composite unique).
-      // If that fails, we fallback to simple INSERT and ignore errors for duplicates.
-      const { error: linkError } = await supabase
+    // 5. Upsert campaign links in batches (Phase 62–100%)
+    const linkChunks = chunkArray(campaignPayload, CHUNK);
+
+    for (let i = 0; i < linkChunks.length; i++) {
+      const { error: upsertErr } = await supabase
         .from('campaign_contacts')
-        .upsert(campaignContactsPayload, { onConflict: 'campaign_id,contact_id', ignoreDuplicates: true });
+        .upsert(linkChunks[i], { onConflict: 'campaign_id,contact_id', ignoreDuplicates: true });
 
-      if (linkError) {
-        // If upsert fails (e.g. no constraint), try simple insert.
-        // This might fail if duplicates exist, but it's the best effortless fallback.
-        console.warn('Upsert failed on campaign_contacts (possibly no constraint), trying insert...', linkError);
-        const { error: insertLinkError } = await supabase
-          .from('campaign_contacts')
-          .insert(campaignContactsPayload);
-
-        if (insertLinkError) {
-          // Check if error is just "duplicate key", which is fine. If not, throw.
-          if (!insertLinkError.message.includes('duplicate')) {
-            throw insertLinkError;
-          }
-        }
+      if (upsertErr) {
+        console.warn('Upsert falhou, tentando insert simples...', upsertErr);
+        const { error: insertErr } = await supabase.from('campaign_contacts').insert(linkChunks[i]);
+        if (insertErr && !insertErr.message.includes('duplicate')) throw insertErr;
       }
+
+      report(62 + ((i + 1) / linkChunks.length) * 38, `Vinculando contatos (lote ${i + 1}/${linkChunks.length})...`);
     }
+
+    report(100, 'Importação concluída!');
+  },
+  */
+
+  //redireciona payload para a Edge Function para o ETL no servidor
+  async importContacts(
+    campaignId: string,
+    contactsData: {
+      nome: string;
+      cpf: string;
+      telefone: string;
+      instituicao: string;
+    }[],
+    onProgress?: (percent: number, label: string) => void
+  ): Promise<any> {
+
+    if (!contactsData || contactsData.length === 0) return;
+
+    onProgress?.(5, 'Enviando dados para processamento...');
+
+    const { data, error } = await supabase.functions.invoke('import-contacts', {
+      body: {
+        campaignId,
+        contacts: contactsData
+      }
+    });
+
+    if (error) {
+      console.error('Erro na Edge Function:', error);
+      throw error;
+    }
+
+    onProgress?.(100, 'Importação concluída.');
+
+    return data;
   },
 
   // --- ACTIONS (New) ---
@@ -332,11 +357,32 @@ export const supabaseService = {
     }
   },
 
-  async updateContact(contactId: string, data: { nome?: string; telefone?: string }): Promise<void> {
+  async updateContact(contactId: string, data: { nome?: string; telefone?: string; cpf?: string }): Promise<void> {
     // Note: This updates the PERSON (contacts table), not just the campaign link
+
+    // Normalize data before updating
+    const normalizedData: any = {};
+
+    if (data.nome !== undefined) {
+      normalizedData.nome = data.nome;
+    }
+
+    if (data.telefone !== undefined) {
+      // Normalize phone: remove non-digits and add +55 if needed
+      const cleanNums = data.telefone.replace(/\D/g, '');
+      normalizedData.telefone = (cleanNums.length === 12 || cleanNums.length === 13)
+        ? `+${cleanNums}`
+        : `+55${cleanNums}`;
+    }
+
+    if (data.cpf !== undefined) {
+      // Normalize CPF: remove non-digits
+      normalizedData.cpf = data.cpf.replace(/\D/g, '');
+    }
+
     const { error } = await supabase
       .from('contacts')
-      .update(data)
+      .update(normalizedData)
       .eq('id', contactId);
 
     if (error) {
@@ -365,7 +411,7 @@ export const supabaseService = {
         )
       `)
       .order('started_at', { ascending: false })
-      .limit(50);
+      .limit(1000);
 
     if (error) {
       console.error('Error fetching calls:', error);
@@ -386,6 +432,20 @@ export const supabaseService = {
         campaignName = call.campaign_contacts.campaigns.nome;
       }
 
+      // Extract raw summary and successEvaluation from metadata_raw
+      const meta = call.metadata_raw || {};
+      // VAPI stores these under analysis.summary / analysis.successEvaluation
+      const rawSummary: string =
+        meta?.analysis?.summary ||
+        meta?.summary ||
+        call.summary ||
+        '';
+      const rawSuccessEval: string =
+        meta?.analysis?.successEvaluation ??
+        meta?.successEvaluation ??
+        call.success_evaluation ??
+        '';
+
       return {
         id: call.id,
         vapiCallId: call.vapi_call_id,
@@ -397,9 +457,9 @@ export const supabaseService = {
         duration: durationFormatted,
         status: call.status === 'completed' ? 'Concluída' : 'Falhou',
         reason: call.ended_reason || '-',
-        success: call.success_evaluation === 'true' || call.success_evaluation === true || false,
+        success: call.success_evaluation === 'true' || call.success_evaluation === true ||
+          String(rawSuccessEval).toLowerCase() === 'true',
         cost: Number(call.custo_total) || 0,
-        // Add detailed costs
         custo_stt: Number(call.custo_stt) || 0,
         custo_tts: Number(call.custo_tts) || 0,
         custo_vapi: Number(call.custo_vapi) || 0,
@@ -408,13 +468,15 @@ export const supabaseService = {
         stereoRecordingUrl: call.stereo_recording_url,
         transcript: call.transcript,
         summary: call.summary,
-        // Add structured data fields
         structured_name: call.structured_name,
         structured_rating_label: call.structured_rating_label,
         structured_rating_text: call.structured_rating_text,
         structured_purpose: call.structured_purpose,
         structured_main_points: call.structured_main_points,
-        analysis: call.analysis
+        analysis: call.analysis,
+        metadata_raw: meta,
+        raw_summary: rawSummary,
+        raw_success_evaluation: String(rawSuccessEval)
       };
     });
   },

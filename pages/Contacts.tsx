@@ -32,15 +32,27 @@ export const Contacts: React.FC = () => {
   const [importCampaignId, setImportCampaignId] = useState('');
   const [importPreview, setImportPreview] = useState<any[]>([]);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ pct: number; label: string } | null>(null);
 
   // Edit Modal State
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', phone: '' });
+  const [editForm, setEditForm] = useState({ name: '', phone: '', cpf: '' });
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCampaignFilter, setSelectedCampaignFilter] = useState('all');
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const PAGE_SIZE_OPTIONS = [50, 100, 500, 1000];
+
+  const handleFilterChange = <T,>(setter: React.Dispatch<React.SetStateAction<T>>) =>
+    (value: T) => {
+      setter(value);
+      setCurrentPage(1);
+    };
 
   const fetchData = async () => {
     setLoading(true);
@@ -113,6 +125,17 @@ export const Contacts: React.FC = () => {
     if (!createForm.campaignId) return alert('Selecione uma campanha.');
     if (!createForm.name || !createForm.phone) return alert('Nome e Telefone são obrigatórios.');
 
+    // Validação de CPF obrigatório
+    if (!createForm.cpf || createForm.cpf.trim() === '') {
+      return alert('CPF é obrigatório.');
+    }
+
+    // Validação de formato de CPF (11 dígitos)
+    const cpfDigits = createForm.cpf.replace(/\D/g, '');
+    if (cpfDigits.length !== 11) {
+      return alert('CPF inválido. Deve conter 11 dígitos.');
+    }
+
     setCreating(true);
     try {
       const contactData = [{
@@ -130,7 +153,12 @@ export const Contacts: React.FC = () => {
       fetchData();
     } catch (e: any) {
       console.error(e);
-      alert(`Erro ao criar contato: ${e.message}`);
+      // Mensagem de erro específica para violação de constraint única
+      if (e.message?.includes('duplicate') || e.message?.includes('idx_contacts_cpf_telefone')) {
+        alert('Erro: Este CPF já está associado a este número de telefone.');
+      } else {
+        alert(`Erro ao criar contato: ${e.message}`);
+      }
     } finally {
       setCreating(false);
     }
@@ -140,26 +168,57 @@ export const Contacts: React.FC = () => {
 
   const openEditModal = (contact: Contact) => {
     setEditingContact(contact);
-    setEditForm({ name: contact.name, phone: contact.phone });
+    setEditForm({ name: contact.name, phone: contact.phone, cpf: contact.cpf || '' });
     setIsEditOpen(true);
   };
 
   const handleSaveEdit = async () => {
     if (!editingContact) return;
+
+    // Validação de CPF obrigatório
+    if (!editForm.cpf || editForm.cpf.trim() === '') {
+      return alert('CPF é obrigatório.');
+    }
+
+    // Validação de formato de CPF (11 dígitos)
+    const cpfDigits = editForm.cpf.replace(/\D/g, '');
+    if (cpfDigits.length !== 11) {
+      return alert('CPF inválido. Deve conter 11 dígitos.');
+    }
+
+    console.log('🔄 Atualizando contato:', {
+      contactId: editingContact.contactId,
+      nome: editForm.name,
+      telefone: editForm.phone,
+      cpf: editForm.cpf,
+      cpfNormalizado: cpfDigits
+    });
+
     try {
       // Update the actual person record (contacts table), usually linked via contactId
       await supabaseService.updateContact(editingContact.contactId, {
         nome: editForm.name,
-        telefone: editForm.phone
+        telefone: editForm.phone,
+        cpf: editForm.cpf
       });
 
+      console.log('✅ Contato atualizado com sucesso no banco');
+
       // Update local state
-      setContacts(prev => prev.map(c => c.id === editingContact.id ? { ...c, name: editForm.name, phone: editForm.phone } : c));
+      setContacts(prev => prev.map(c => c.id === editingContact.id ? { ...c, name: editForm.name, phone: editForm.phone, cpf: cpfDigits } : c));
       setIsEditOpen(false);
       alert('Contato atualizado com sucesso!');
-    } catch (e) {
-      console.error(e);
-      alert('Erro ao atualizar contato.');
+
+      // Refresh data from server to ensure consistency
+      await fetchData();
+    } catch (e: any) {
+      console.error('❌ Erro ao atualizar contato:', e);
+      // Mensagem de erro específica para violação de constraint única
+      if (e.message?.includes('duplicate') || e.message?.includes('idx_contacts_cpf_telefone')) {
+        alert('Erro: Este CPF já está associado a este número de telefone.');
+      } else {
+        alert('Erro ao atualizar contato.');
+      }
     }
   };
 
@@ -195,6 +254,7 @@ export const Contacts: React.FC = () => {
     if (!importPreview || importPreview.length === 0) return alert('O arquivo está vazio ou não pôde ser lido. Verifique o formato.');
 
     setImporting(true);
+    setImportProgress({ pct: 0, label: 'Iniciando...' });
     try {
       // Map excel columns to expected format
       // Expected: nome, cpf, telefone, instituicao
@@ -221,26 +281,74 @@ export const Contacts: React.FC = () => {
           instituicao: normalizedRow['instituicao'] || normalizedRow['empresa'] || normalizedRow['organization'] || ''
         };
       }).filter(r => {
-        // Basic validation: must have some phone number
+        // Validação: deve ter telefone E CPF válidos
         const hasPhone = r.telefone && r.telefone.replace(/\D/g, '').length > 5;
+        const hasCpf = r.cpf && r.cpf.replace(/\D/g, '').length === 11;
+
         if (!hasPhone) console.warn('Skipping row without valid phone:', r);
-        return hasPhone;
+        if (!hasCpf) console.warn('Skipping row without valid CPF (11 digits):', r);
+
+        return hasPhone && hasCpf;
       });
 
       console.log('Dados formatados para envio:', formattedData.length);
 
-      if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado. Verifique se as colunas 'telefone' e 'nome' existem no arquivo.");
+      if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado. Verifique se as colunas 'telefone', 'nome' e 'cpf' existem e são válidas.");
 
-      await supabaseService.importContacts(importCampaignId, formattedData);
+
+      // flag atual chamando função original de importação: importContacts
+      const USE_EDGE_IMPORT = true;
+
+      // instruindo o usuario para esperar a thread de importação dependendo do volume de contatos, para evitar que ele cancele o processo por achar que travou
+      if(formattedData.length >= 20000){
+        alert("Volume alto de ligações, aguarde, pode levar alguns minutos para processar. Você receberá uma notificação quando estiver pronto.");
+      }else{
+        alert("Importação iniciada! Você receberá uma notificação quando estiver pronta. Aguarde uns segundos");
+      }
+
+      // chamada da funcao importContacts2 que processa os dados no frontend e envia para uma edge function para processamento assíncrono, evitando timeouts e sobrecarga no backend
+      if (USE_EDGE_IMPORT) {
+
+        const BATCH_SIZE = 2000;
+        const total = formattedData.length;
+        const totalBatches = Math.ceil(total / BATCH_SIZE);
+
+        for (let i = 0; i < total; i += BATCH_SIZE) {
+
+          const currentBatch = formattedData.slice(i, i + BATCH_SIZE);
+          const currentBatchNumber = Math.floor(i / BATCH_SIZE) + 1;
+
+          setImportProgress({
+            pct: Math.round((currentBatchNumber - 1) / totalBatches * 100),
+            label: `Processando lote ${currentBatchNumber} de ${totalBatches}...`
+          });
+
+          await supabaseService.importContacts(
+            importCampaignId,
+            currentBatch
+          );
+        }
+
+        setImportProgress({
+          pct: 100,
+          label: 'Importação concluída.'
+        });
+      }
 
       alert(`Sucesso! ${formattedData.length} contatos foram enviados para processamento.`);
       setIsImportOpen(false);
       setImportFile(null);
       setImportPreview([]);
+      setImportProgress(null);
       fetchData();
     } catch (e: any) {
       console.error('Erro no submit de importação:', e);
-      alert(`Erro na importação: ${e.message}`);
+      setImportProgress(null);
+      if (e.message?.includes('duplicate') || e.message?.includes('idx_contacts_cpf_telefone')) {
+        alert('Erro: Alguns contatos possuem a mesma combinação CPF+Telefone já cadastrada.');
+      } else {
+        alert(`Erro na importação: ${e.message}`);
+      }
     } finally {
       setImporting(false);
     }
@@ -256,6 +364,13 @@ export const Contacts: React.FC = () => {
 
     return matchesSearch && matchesCampaign;
   });
+
+  // Pagination derived values
+  const totalPages = Math.max(1, Math.ceil(filteredContacts.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedContacts = filteredContacts.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const rangeStart = filteredContacts.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const rangeEnd = Math.min(safePage * pageSize, filteredContacts.length);
 
   return (
     <div className="space-y-6">
@@ -279,14 +394,14 @@ export const Contacts: React.FC = () => {
               icon={Search}
               placeholder="Buscar por nome, telefone ou CPF..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => handleFilterChange(setSearchTerm)(e.target.value)}
             />
           </div>
           <div>
             <select
               className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent"
               value={selectedCampaignFilter}
-              onChange={(e) => setSelectedCampaignFilter(e.target.value)}
+              onChange={(e) => handleFilterChange(setSelectedCampaignFilter)(e.target.value)}
             >
               <option value="all">Todas as Campanhas</option>
               {campaignsList.map(c => (
@@ -327,7 +442,7 @@ export const Contacts: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                {filteredContacts.map((contact) => (
+                {paginatedContacts.map((contact) => (
                   <tr key={contact.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900 dark:text-white">{contact.name}</div>
@@ -396,6 +511,57 @@ export const Contacts: React.FC = () => {
             </table>
           </div>
         )}
+
+        {/* Pagination Footer */}
+        {!loading && filteredContacts.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3">
+            {/* Left: range info */}
+            <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+              Exibindo <span className="font-semibold text-slate-700 dark:text-slate-300">{rangeStart}–{rangeEnd}</span> de{' '}
+              <span className="font-semibold text-slate-700 dark:text-slate-300">{filteredContacts.length}</span> registros
+            </p>
+
+            {/* Center: page size selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 dark:text-slate-400">Linhas por página:</span>
+              <div className="flex items-center gap-1">
+                {PAGE_SIZE_OPTIONS.map(size => (
+                  <button
+                    key={size}
+                    onClick={() => { setPageSize(size); setCurrentPage(1); }}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${pageSize === size
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: prev / page indicator / next */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={safePage <= 1}
+                className="px-3 py-1 rounded text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                ← Anterior
+              </button>
+              <span className="text-xs font-mono text-slate-600 dark:text-slate-400 min-w-[70px] text-center">
+                {safePage} / {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={safePage >= totalPages}
+                className="px-3 py-1 rounded text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                Próxima →
+              </button>
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* CREATE MODAL */}
@@ -427,9 +593,11 @@ export const Contacts: React.FC = () => {
           />
 
           <Input
-            label="CPF (Opcional)"
+            label="CPF *"
+            placeholder="000.000.000-00 ou 00000000000"
             value={createForm.cpf}
             onChange={(e) => setCreateForm({ ...createForm, cpf: e.target.value })}
+            required
           />
 
           <Input
@@ -483,7 +651,7 @@ export const Contacts: React.FC = () => {
                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
                   <Upload className="w-8 h-8 mb-3 text-slate-400" />
                   <p className="text-sm text-slate-500 dark:text-slate-400"><span className="font-semibold">Clique para enviar</span> ou arraste</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">XLSX ou CSV (Colunas: nome, telefone, cpf)</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">XLSX ou CSV (Colunas obrigatórias: nome, telefone, cpf)</p>
                 </div>
                 <input type="file" className="hidden" accept=".csv, .xlsx, .xls" onChange={handleFileChange} />
               </label>
@@ -497,7 +665,7 @@ export const Contacts: React.FC = () => {
           </div>
 
           <div className="flex justify-end gap-3 mt-4">
-            <Button variant="secondary" onClick={() => setIsImportOpen(false)}>Cancelar</Button>
+            <Button variant="secondary" onClick={() => setIsImportOpen(false)} disabled={importing}>Cancelar</Button>
             <Button onClick={handleImportSubmit} disabled={!importFile || !importCampaignId || importing}>
               {importing ? (
                 <>
@@ -507,8 +675,25 @@ export const Contacts: React.FC = () => {
               ) : 'Processar Importação'}
             </Button>
           </div>
+
+          {/* Progress bar — shown during import */}
+          {importing && importProgress && (
+            <div className="mt-4 space-y-1.5">
+              <div className="flex justify-between items-center text-xs text-slate-500 dark:text-slate-400">
+                <span>{importProgress.label}</span>
+                <span className="font-mono font-semibold text-primary">{importProgress.pct}%</span>
+              </div>
+              <div className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${importProgress.pct}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
+
 
       {/* EDIT MODAL */}
       <Modal
@@ -523,6 +708,15 @@ export const Contacts: React.FC = () => {
             value={editForm.name}
             onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
           />
+
+          <Input
+            label="CPF *"
+            placeholder="000.000.000-00 ou 00000000000"
+            value={editForm.cpf}
+            onChange={(e) => setEditForm({ ...editForm, cpf: e.target.value })}
+            required
+          />
+
           <Input
             label="Telefone (com DDD)"
             value={editForm.phone}

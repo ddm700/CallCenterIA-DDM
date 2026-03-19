@@ -284,6 +284,15 @@ Deno.serve(async (req) => {
                 successEvaluation = String(call.analysis.successEvaluation);
             }
         }
+        const completedEndings = [
+            'assistant-ended-call',
+            'customer-ended-call',
+            'customer-did-not-answer',
+            'customer-busy',
+            'voicemail',
+            'silence-timed-out'
+        ];
+
 
         // 8. Preparar dados para atualização
         const updateData = {
@@ -311,9 +320,9 @@ Deno.serve(async (req) => {
             structured_next_steps: structured_next_steps,
             structured_emotions_objections: structured_emotions_objections,
             metadata_raw: payload, // Salvar payload completo para debug
-            status: ['assistant-ended-call', 'customer-ended-call', 'Sem Débito'].includes(call.endedReason)
-                        ? 'completed'
-                        : 'failed',
+            status: [...completedEndings, 'Sem D�bito', 'Sem Débito'].includes(call.endedReason)
+                ? 'completed'
+                : call.endedReason,
         };
 
         console.log('Atualizando chamada:', existingCall.id, updateData);
@@ -355,18 +364,34 @@ Deno.serve(async (req) => {
 
                 // Falhas técnicas que não indicam conversa real
                 const technicalFailures = [
-                    'voicemail-reached',
+                    // Erros na inicialização da chamada
+                    'call.start.error-get-resources-validation',
+                    'call.start.error-get-transport',
+
+                    // Erros durante a chamada (infra / SIP / provider)
+                    'call.in-progress.error-sip-outbound-call-failed-to-connect',
+                    'call.in-progress.error-providerfault-outbound-sip-503-service-unavailable',
+                    'call.in-progress.error-providerfault-outbound-sip-480-temporarily-unavailable',
+
+                    // Outros erros técnicos genéricos já previstos
                     'pipeline-error-openai-voice-failed',
                     'assistant-not-found',
-                    'invalid-number',
-                    'no-answer',
-                    'busy'
+                    'invalid-number'
                 ];
-
+                // Cliente não atendeu (tentativa válida, sem conversa)
+                const noAnswerFailures = [
+                    'customer-did-not-answer',
+                    'customer-busy',
+                    'voicemail',
+                    'silence-timed-out'
+                ];
                 // Términos que indicam que houve conversa real
                 const successfulEndings = [
                     'customer-ended-call',
-                    'assistant-ended-call'
+                    'assistant-ended-call',
+                    'customer-busy',
+                    'voicemail',
+                    'silence-timed-out'
                 ];
 
                 // Duração mínima para considerar conversa válida (segundos)
@@ -374,44 +399,48 @@ Deno.serve(async (req) => {
 
                 // Determinar novo status baseado no resultado da ligação
                 if (successEvaluation === 'true') {
-                    // Prioridade 1: VAPI retornou sucesso explícito
+                    // Prioridade 1: sucesso explícito da VAPI
                     newStatus = 'concluido';
                     console.log('✅ Ligação concluída - successEvaluation = true');
+
                 } else if (
                     successfulEndings.includes(call.endedReason) &&
                     durationSeconds >= MIN_DURATION_FOR_SUCCESS
                 ) {
-                    // Prioridade 2: Conversa real aconteceu (cliente/assistente encerrou após 15+ segundos)
+                    // Prioridade 2: conversa real ocorreu
                     newStatus = 'concluido';
                     console.log(`✅ Ligação concluída - ${call.endedReason} com duração ${durationSeconds}s`);
-                } else if (campaignContact.tentativas_realizadas >= maxTentativas) {
-                    // Atingiu limite de tentativas
-                    newStatus = 'falhou';
-                    console.log('❌ Limite de tentativas atingido');
+
+                } else if (noAnswerFailures.includes(call.endedReason)) {
+                    // Cliente não atendeu (tentativa válida)
+                    if (campaignContact.tentativas_realizadas >= maxTentativas) {
+                        newStatus = 'falhou';
+                        console.log('❌ Cliente não atendeu e limite de tentativas atingido');
+                    } else {
+                        newStatus = 'em_andamento';
+                        console.log('🔁 Cliente não atendeu, nova tentativa será agendada');
+                    }
                 } else if (technicalFailures.includes(call.endedReason)) {
-                    // Falha técnica - volta para pendente
-                    newStatus = 'pendente';
-                    console.log(`⚠️ Falha técnica (${call.endedReason}), voltando para pendente`);
+                    // Falha técnica (tentativa NÃO válida)
+                    if (campaignContact.tentativas_realizadas >= maxTentativas) {
+                        newStatus = 'falhou';
+                        console.log('❌ Falha técnica e limite de tentativas atingido');
+                    } else {
+                        newStatus = 'em_andamento';
+                        console.log(`⚠️ Falha técnica (${call.endedReason}), nova tentativa será agendada`);
+                    }
+
                 } else {
-                    // Outros casos (ligação curta, etc.) - volta para pendente
-                    newStatus = 'pendente';
-                    console.log(`🔄 Ligação não concluída (${call.endedReason}, ${durationSeconds}s), voltando para pendente`);
+                    // Qualquer motivo não mapeado → tratar como tentativa inválida segura
+                    if (campaignContact.tentativas_realizadas >= maxTentativas) {
+                        newStatus = 'falhou';
+                        console.log('❌ Motivo não mapeado e limite de tentativas atingido');
+                    } else {
+                        newStatus = 'em_andamento';
+                        console.log(`⚠️ Motivo não mapeado (${call.endedReason}), nova tentativa será agendada`);
+                    }
                 }
 
-                console.log('Novo Status:', newStatus);
-
-                // Atualizar status no banco
-                const { error: statusError } = await supabase
-                    .from('campaign_contacts')
-                    .update({
-                        status: newStatus,
-                        ultima_tentativa: new Date().toISOString()
-                    })
-                    .eq('id', campaignContactId);
-
-                if (statusError) {
-                    console.error('Erro ao atualizar status do campaign_contact:', statusError);
-                }
             }
         }
 

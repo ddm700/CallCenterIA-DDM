@@ -112,33 +112,72 @@ export const CallDetailsModal: React.FC<CallDetailsModalProps> = ({ isOpen, onCl
   const custoVAPI = call.custo_vapi || 0;
   const custoTotal = call.custo_total || call.cost || 0;
 
-  // Simple translation helper for common English phrases
-  const translateSummary = (text: string): string => {
+  // --- Translation helper (English → Portuguese-BR) ---
+  const translateToPtBR = (text: string): string => {
     if (!text) return text;
-
-    // Check if text is in English (simple heuristic)
-    const isEnglish = /\b(called|representing|inform|about|debt|amounts|ended)\b/i.test(text);
-
+    // Heuristic: only translate if likely English
+    const isEnglish = /\b(the|and|was|from|called|contact|about|payment|balance|course|their|she|he|they|could|would|for|with|not|had|has|have|offered|stated|scheduled|pending|regarding|installments|follow-up|informed|confirmation|assessment|team)\b/i.test(text);
     if (!isEnglish) return text;
 
-    // Basic translations for common phrases
     return text
-      .replace(/representing/gi, 'representando')
-      .replace(/called/gi, 'ligou para')
-      .replace(/to inform him about/gi, 'para informá-lo sobre')
-      .replace(/to inform her about/gi, 'para informá-la sobre')
-      .replace(/an outstanding debt/gi, 'um débito pendente')
-      .replace(/The debt amounts to/gi, 'O débito totaliza')
-      .replace(/The call ended shortly after/gi, 'A chamada foi encerrada logo após')
-      .replace(/this information was conveyed/gi, 'esta informação ser transmitida');
+      // People & roles
+      .replace(/\bcalled\b/gi, 'ligou para')
+      .replace(/\bcontacted\b/gi, 'entrou em contato com')
+      .replace(/\brepresenting\b/gi, 'representando')
+      .replace(/\bassessment team\b/gi, 'equipe de cobrança')
+
+      // Financial
+      .replace(/\bpending balance\b/gi, 'saldo pendente')
+      .replace(/\boutstanding (debt|balance)\b/gi, 'débito em aberto')
+      .replace(/\bpayment options?\b/gi, 'opções de pagamento')
+      .replace(/\binstallments?\b/gi, 'parcelas')
+      .replace(/\bvia card\b/gi, 'via cartão')
+      .replace(/\bboleto\b/gi, 'boleto')
+      .replace(/\bThe debt amounts? to\b/gi, 'O débito é de')
+      .replace(/\bpay\b/gi, 'pagar')
+      .replace(/\bpayment\b/gi, 'pagamento')
+
+      // Call outcomes
+      .replace(/\bscheduled a follow-?up call\b/gi, 'agendou um retorno de chamada')
+      .replace(/\bfor the following week\b/gi, 'para a semana seguinte')
+      .replace(/\bThe call ended (shortly after|after)\b/gi, 'A chamada foi encerrada logo após')
+      .replace(/\bThe user stated (they|he|she) could not\b/gi, 'O cliente informou que não poderia')
+      .replace(/\bShe offered\b/gi, 'Foi oferecido')
+      .replace(/\bHe offered\b/gi, 'Foi oferecido')
+      .replace(/\boffered\b/gi, 'ofereceu')
+      .replace(/\binformed\b/gi, 'informou')
+      .replace(/\bregarding\b/gi, 'sobre')
+      .replace(/\bconfirmation\b/gi, 'confirmação')
+      .replace(/\bcourse\b/gi, 'curso')
+      .replace(/\btheir\b/gi, 'seu')
+      .replace(/\btoday\b/gi, 'hoje')
+
+      // Generic
+      .replace(/\bwas conveyed\b/gi, 'foi transmitida')
+      .replace(/\bwas informed\b/gi, 'foi informado');
   };
 
-  // Get summary with translation
-  const summary = translateSummary(call.summary || analysis.summary || '');
+  // --- successEvaluation → pt-BR label ---
+  const rawEval = call.raw_success_evaluation ?? String(call.success_evaluation ?? '');
+  const isSuccess = rawEval.toLowerCase() === 'true' || rawEval === '1' || call.success;
 
-  // Get structured evaluation data
+  const successLabel = (() => {
+    if (call.structured_rating_label) return call.structured_rating_label;
+    if (isSuccess) return 'Sucesso';
+    // Map common VAPI values
+    if (rawEval.toLowerCase() === 'false') return 'Sem Sucesso';
+    if (rawEval.toLowerCase() === 'unknown') return 'Inconclusivo';
+    return 'Sem Sucesso / Neutro';
+  })();
+
+  // --- Summary: prefer metadata_raw, fallback to existing fields ---
+  const summary = translateToPtBR(
+    call.raw_summary || call.summary || analysis.summary || ''
+  );
+
+  // Evaluation detail text
   const structuredEvaluation = call.structured_rating_text || analysis.successEvaluation || '';
-  const evaluationLabel = call.structured_rating_label || (call.success ? 'Sucesso' : 'Sem Sucesso / Neutro');
+  const evaluationLabel = successLabel;
 
   return (
     <Modal
@@ -211,7 +250,7 @@ export const CallDetailsModal: React.FC<CallDetailsModalProps> = ({ isOpen, onCl
             <div className="p-3 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
               <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Resultado da Avaliação</p>
               <div className="flex items-center gap-2 mb-2">
-                <Badge variant={call.success ? 'success' : 'neutral'}>
+                <Badge variant={isSuccess ? 'success' : 'neutral'}>
                   {evaluationLabel}
                 </Badge>
                 {call.structured_name && (
