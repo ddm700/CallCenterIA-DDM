@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabaseClient';
+import { apiRequest } from '../lib/apiClient';
 import { Campaign, Contact, Call } from '../types';
 
 export const supabaseService = {
@@ -310,17 +311,13 @@ export const supabaseService = {
 
     onProgress?.(5, 'Enviando dados para processamento...');
 
-    const { data, error } = await supabase.functions.invoke('import-contacts', {
-      body: {
+    const data = await apiRequest<any>('/api/contacts/import', {
+      method: 'POST',
+      body: JSON.stringify({
         campaignId,
         contacts: contactsData
-      }
+      })
     });
-
-    if (error) {
-      console.error('Erro na Edge Function:', error);
-      throw error;
-    }
 
     onProgress?.(100, 'Importação concluída.');
 
