@@ -108,44 +108,32 @@ Deno.serve(async (req) => {
         let payload: any = await req.json();
         console.log('Payload RAW:', JSON.stringify(payload, null, 2));
 
-        // 1. Normalização do Payload
-        // VAPI pode mandar envelopado em "message" (padrão Server URL)
+        // 🚨 CORREÇÃO: VAPI/n8n manda dentro de "message"
         if (payload.message) {
             console.log('📦 Payload envelopado em "message", extraindo...');
             payload = payload.message;
         }
 
-        // 2. Extração do objeto CALL e METADATA
-        // Às vezes o payload JÁ É o objeto call (se vier do n8n flatten)
-        // Às vezes tem uma propriedade .call
-        let call = payload.call || payload;
-        let metadata = payload.metadata || payload.call?.metadata || {};
+        console.log('Payload Estruturado:', JSON.stringify(payload, null, 2));
 
-        // Se o objeto 'call' não tiver ID, tentamos achar no payload raiz
-        if (!call.id && payload.id) {
-            call = payload;
-        }
-
-        console.log('--- DADOS EXTRAÍDOS ---');
-        console.log('Call ID:', call.id);
-        console.log('Status:', call.status);
-        console.log('Started At:', call.startedAt);
-        console.log('Ended At:', call.endedAt);
-        console.log('Analysis Summary:', call.analysis?.summary);
-        console.log('Metadata Contact ID:', metadata.contactId);
-        console.log('-----------------------');
-
-        // Se ainda não tivermos ID, algo está muito errado com o payload
-        if (!call.id) {
-            console.error('❌ Não foi possível identificar o objeto CALL no payload.');
+        // Validar tipo do evento
+        if (payload.type !== 'end-of-call-report') {
+            console.warn('⚠️ Tipo de evento ignorado:', payload.type);
             return new Response(
-                JSON.stringify({ success: false, error: 'Invalid payload structure: missing call.id' }),
-                { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                JSON.stringify({ success: false, error: 'Event type ignored', type: payload.type }),
+                { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
             );
         }
 
-        // Validar tipo do evento (opcional, pois já garantimos que temos dados)
-        // if (payload.type !== 'end-of-call-report' && call.status !== 'ended') ...
+        const { call, metadata } = payload as VapiEndOfCallReport;
+
+        // ALTEAÇÃO HUGO -linha 130 a 135
+        // sobrescreve metadata se ele estiver vindo dentro de call
+        //construindo um objeto de metadados so para o contactId e campaignContactId
+        const metadataFromCall = 
+            (call as any)?.metadata 
+            ?? metadata 
+            ?? {};
 
         // 1. Buscar chamada existente pelo vapi_call_id (prioridade)
         let existingCall: { id: string; campaign_contact_id: string | null } | null = null;
@@ -214,12 +202,13 @@ Deno.serve(async (req) => {
         if (!existingCall && !foundCall) {
             console.warn(`⚠️ Nenhum registro encontrado. Criando novo para vapi_call_id: ${call.id}`);
 
+            // MANUNTENÇÃO HUGO LINHAS - 209 E 210
             const { data: newCall, error: insertError } = await supabase
                 .from('calls')
                 .insert({
                     vapi_call_id: call.id,
-                    campaign_contact_id: metadata?.campaignContactId || null,
-                    contact_phone_id: metadata?.phoneId || null,
+                    campaign_contact_id: metadataFromCall?.campaignContactId || null,
+                    contact_phone_id: metadataFromCall?.phoneId || null,
                     status: 'queued',
                 })
                 .select('id, campaign_contact_id')
@@ -284,18 +273,12 @@ Deno.serve(async (req) => {
                 successEvaluation = String(call.analysis.successEvaluation);
             }
         }
-        const completedEndings = [
-            'assistant-ended-call',
-            'customer-ended-call',
-            'customer-did-not-answer',
-            'customer-busy',
-            'voicemail',
-            'silence-timed-out'
-        ];
-
 
         // 8. Preparar dados para atualização
+        // Atualização -HUGO- adicionando campos campaign_contact_id e contact_phone_id para a tabela calls
         const updateData = {
+            campaign_contact_id: metadataFromCall.campaignContactId ?? existingCall.campaign_contact_id ?? null,
+            contact_phone_id: metadataFromCall.phoneId ?? null ,
             started_at: call.startedAt,
             ended_at: call.endedAt,
             ended_reason: call.endedReason,
@@ -320,7 +303,7 @@ Deno.serve(async (req) => {
             structured_next_steps: structured_next_steps,
             structured_emotions_objections: structured_emotions_objections,
             metadata_raw: payload, // Salvar payload completo para debug
-            status: completedEndings.includes(call.endedReason)
+            status: call.endedReason === 'assistant-ended-call' || call.endedReason === 'customer-ended-call'
                 ? 'completed'
                 : call.endedReason,
         };
@@ -364,34 +347,18 @@ Deno.serve(async (req) => {
 
                 // Falhas técnicas que não indicam conversa real
                 const technicalFailures = [
-                    // Erros na inicialização da chamada
-                    'call.start.error-get-resources-validation',
-                    'call.start.error-get-transport',
-
-                    // Erros durante a chamada (infra / SIP / provider)
-                    'call.in-progress.error-sip-outbound-call-failed-to-connect',
-                    'call.in-progress.error-providerfault-outbound-sip-503-service-unavailable',
-                    'call.in-progress.error-providerfault-outbound-sip-480-temporarily-unavailable',
-
-                    // Outros erros técnicos genéricos já previstos
+                    'voicemail-reached',
                     'pipeline-error-openai-voice-failed',
                     'assistant-not-found',
-                    'invalid-number'
+                    'invalid-number',
+                    'no-answer',
+                    'busy'
                 ];
-                // Cliente não atendeu (tentativa válida, sem conversa)
-                const noAnswerFailures = [
-                    'customer-did-not-answer',
-                    'customer-busy',
-                    'voicemail',
-                    'silence-timed-out'
-                ];
+
                 // Términos que indicam que houve conversa real
                 const successfulEndings = [
                     'customer-ended-call',
-                    'assistant-ended-call',
-                    'customer-busy',
-                    'voicemail',
-                    'silence-timed-out'
+                    'assistant-ended-call'
                 ];
 
                 // Duração mínima para considerar conversa válida (segundos)
@@ -399,48 +366,44 @@ Deno.serve(async (req) => {
 
                 // Determinar novo status baseado no resultado da ligação
                 if (successEvaluation === 'true') {
-                    // Prioridade 1: sucesso explícito da VAPI
+                    // Prioridade 1: VAPI retornou sucesso explícito
                     newStatus = 'concluido';
                     console.log('✅ Ligação concluída - successEvaluation = true');
-
                 } else if (
                     successfulEndings.includes(call.endedReason) &&
                     durationSeconds >= MIN_DURATION_FOR_SUCCESS
                 ) {
-                    // Prioridade 2: conversa real ocorreu
+                    // Prioridade 2: Conversa real aconteceu (cliente/assistente encerrou após 15+ segundos)
                     newStatus = 'concluido';
                     console.log(`✅ Ligação concluída - ${call.endedReason} com duração ${durationSeconds}s`);
-
-                } else if (noAnswerFailures.includes(call.endedReason)) {
-                    // Cliente não atendeu (tentativa válida)
-                    if (campaignContact.tentativas_realizadas >= maxTentativas) {
-                        newStatus = 'falhou';
-                        console.log('❌ Cliente não atendeu e limite de tentativas atingido');
-                    } else {
-                        newStatus = 'em_andamento';
-                        console.log('🔁 Cliente não atendeu, nova tentativa será agendada');
-                    }
+                } else if (campaignContact.tentativas_realizadas >= maxTentativas) {
+                    // Atingiu limite de tentativas
+                    newStatus = 'falhou';
+                    console.log('❌ Limite de tentativas atingido');
                 } else if (technicalFailures.includes(call.endedReason)) {
-                    // Falha técnica (tentativa NÃO válida)
-                    if (campaignContact.tentativas_realizadas >= maxTentativas) {
-                        newStatus = 'falhou';
-                        console.log('❌ Falha técnica e limite de tentativas atingido');
-                    } else {
-                        newStatus = 'em_andamento';
-                        console.log(`⚠️ Falha técnica (${call.endedReason}), nova tentativa será agendada`);
-                    }
-
+                    // Falha técnica - volta para pendente
+                    newStatus = 'pendente';
+                    console.log(`⚠️ Falha técnica (${call.endedReason}), voltando para pendente`);
                 } else {
-                    // Qualquer motivo não mapeado → tratar como tentativa inválida segura
-                    if (campaignContact.tentativas_realizadas >= maxTentativas) {
-                        newStatus = 'falhou';
-                        console.log('❌ Motivo não mapeado e limite de tentativas atingido');
-                    } else {
-                        newStatus = 'em_andamento';
-                        console.log(`⚠️ Motivo não mapeado (${call.endedReason}), nova tentativa será agendada`);
-                    }
+                    // Outros casos (ligação curta, etc.) - volta para pendente
+                    newStatus = 'pendente';
+                    console.log(`🔄 Ligação não concluída (${call.endedReason}, ${durationSeconds}s), voltando para pendente`);
                 }
 
+                console.log('Novo Status:', newStatus);
+
+                // Atualizar status no banco
+                const { error: statusError } = await supabase
+                    .from('campaign_contacts')
+                    .update({
+                        status: newStatus,
+                        ultima_tentativa: new Date().toISOString()
+                    })
+                    .eq('id', campaignContactId);
+
+                if (statusError) {
+                    console.error('Erro ao atualizar status do campaign_contact:', statusError);
+                }
             }
         }
 

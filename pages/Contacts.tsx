@@ -295,9 +295,45 @@ export const Contacts: React.FC = () => {
 
       if (formattedData.length === 0) throw new Error("Nenhum contato válido encontrado. Verifique se as colunas 'telefone', 'nome' e 'cpf' existem e são válidas.");
 
-      await supabaseService.importContacts(importCampaignId, formattedData, (pct, label) => {
-        setImportProgress({ pct, label });
-      });
+
+      // flag atual chamando função original de importação: importContacts
+      const USE_EDGE_IMPORT = true;
+
+      // instruindo o usuario para esperar a thread de importação dependendo do volume de contatos, para evitar que ele cancele o processo por achar que travou
+      if(formattedData.length >= 20000){
+        alert("Volume alto de ligações, aguarde, pode levar alguns minutos para processar. Você receberá uma notificação quando estiver pronto.");
+      }else{
+        alert("Importação iniciada! Você receberá uma notificação quando estiver pronta. Aguarde uns segundos");
+      }
+
+      // chamada da funcao importContacts que processa os dados no frontend e envia para uma edge function para processamento assíncrono, evitando timeouts e sobrecarga no backend
+      if (USE_EDGE_IMPORT) {
+
+        const BATCH_SIZE = 2000;
+        const total = formattedData.length;
+        const totalBatches = Math.ceil(total / BATCH_SIZE);
+
+        for (let i = 0; i < total; i += BATCH_SIZE) {
+
+          const currentBatch = formattedData.slice(i, i + BATCH_SIZE);
+          const currentBatchNumber = Math.floor(i / BATCH_SIZE) + 1;
+
+          setImportProgress({
+            pct: Math.round((currentBatchNumber - 1) / totalBatches * 100),
+            label: `Processando lote ${currentBatchNumber} de ${totalBatches}...`
+          });
+
+          await supabaseService.importContacts(
+            importCampaignId,
+            currentBatch
+          );
+        }
+
+        setImportProgress({
+          pct: 100,
+          label: 'Importação concluída.'
+        });
+      }
 
       alert(`Sucesso! ${formattedData.length} contatos foram enviados para processamento.`);
       setIsImportOpen(false);

@@ -41,8 +41,8 @@ interface ProcessResult {
     error?: string;
 }
 
-/** Delay entre lotes de ligações (2 segundos) */
-const DELAY_BETWEEN_BATCHES_MS = 2000;
+/** Delay entre lotes de ligações (1 segundo) */
+const DELAY_BETWEEN_BATCHES_MS = 1000;
 
 /**
  * Handler principal da Edge Function
@@ -348,7 +348,7 @@ Deno.serve(async (req) => {
 
         // 7. Processar contatos em lotes (PARALELO)
         // Aumentamos o lote e processamos em paralelo para evitar Timeout da Edge Function
-        const CONCURRENT_BATCH_SIZE = 25; // 25 chamadas simultâneas
+        const CONCURRENT_BATCH_SIZE = 10; // 10 chamadas simultâneas
         const allResults: ProcessResult[] = [];
 
         console.log(`🚀 Processando ${eligibleContacts.length} contatos em paralelo (Lotes de ${CONCURRENT_BATCH_SIZE})`);
@@ -370,7 +370,7 @@ Deno.serve(async (req) => {
             // Pequena pausa entre lotes para dar respiro ao banco/n8n (1 segundo)
             if (i + CONCURRENT_BATCH_SIZE < eligibleContacts.length) {
                 console.log(`⏳ Aguardando 1s antes do próximo lote...`);
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_BATCHES_MS));
             }
         }
 

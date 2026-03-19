@@ -18,27 +18,27 @@ Deno.serve(async (req) => {
         const body = await req.json();
         const { contactId, campaignId, customerNumber, customerName } = body;
 
-        console.log('🚀 INITIATE-VAPI-CALL (Individual) Iniciada!');
-        console.log('📥 Payload:', JSON.stringify(body));
+        console.log('🚀 INITIATE-VAPI-CALL Iniciada!');
+        console.log('📥 Payload recebido:', JSON.stringify(body));
 
         if (!customerNumber || !customerName) {
             throw new Error('Telefone e Nome são obrigatórios');
         }
 
-        // 1a. Buscar dados extras do contato (CPF)
+        // 🔎 Buscar CPF do contato
         let cpf = '';
         if (contactId) {
             const { data: contactData } = await supabase
                 .from('contacts')
                 .select('cpf')
                 .eq('id', contactId)
-                .single();
+                .maybeSingle();
 
             cpf = contactData?.cpf || '';
             console.log('👤 CPF encontrado:', cpf);
         }
 
-        // 1b. Buscar configuração do n8n (CORRIGIDO: Chave-Valor)
+        // 🔎 Buscar URL do n8n
         const { data: setting } = await supabase
             .from('app_settings')
             .select('setting_value')
@@ -46,30 +46,62 @@ Deno.serve(async (req) => {
             .limit(1)
             .maybeSingle();
 
-        // Fallback para URL fixa
-        const n8nWebhookUrl = setting?.setting_value || 'https://n8n-n8n-start.xzz0ed.easypanel.host/webhook/callcenteria';
+        const n8nWebhookUrl =
+            setting?.setting_value ||
+            'https://n8n-n8n-start.xzz0ed.easypanel.host/webhook/callcenteria';
+
         console.log('🔗 URL do n8n:', n8nWebhookUrl);
 
-        // 2. Preparar payload para o n8n
-        // Se tiver campaignId, busca dados da campanha. Se não, usa defaults.
-        let assistantId = null;
-        let phoneNumberId = null;
+        // 🔎 Buscar dados da campanha (assistant + linha)
+        let assistantId: string | null = null;
+        let phoneNumberId: string | null = null;
 
         if (campaignId) {
             const { data: campaign } = await supabase
                 .from('campaigns')
                 .select('assistant_vapi_id, linha_vapi_id')
                 .eq('id', campaignId)
-                .single();
+                .maybeSingle();
 
             if (campaign) {
                 assistantId = campaign.assistant_vapi_id;
-                phoneNumberId = campaign.linha_vapi_id ? campaign.linha_vapi_id.split(',')[0] : null;
+                phoneNumberId = campaign.linha_vapi_id
+                    ? campaign.linha_vapi_id.split(',')[0]
+                    : null;
             }
         }
 
+        // 🔎 Buscar campaignContactId corretamente
+        let campaignContactId: string | null = null;
+
+        if (campaignId && contactId) {
+            const { data: cc } = await supabase
+                .from('campaign_contacts')
+                .select('id')
+                .eq('campaign_id', campaignId)
+                .eq('contact_id', contactId)
+                .in('status', ['pendente', 'em_andamento'])
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            campaignContactId = cc?.id || null;
+
+            if (cc) {
+                await supabase
+                    .from('campaign_contacts')
+                    .update({
+                        status: 'em_andamento',
+                        ultima_tentativa: new Date().toISOString()
+                    })
+                    .eq('id', cc.id);
+            }
+        }
+
+        // 📤 Payload padronizado para n8n
         const n8nPayload = {
             contactId: contactId,
+            campaignContactId: campaignContactId,
             campaignId: campaignId || 'manual',
             customerNumber: customerNumber,
             customerName: customerName,
@@ -77,15 +109,21 @@ Deno.serve(async (req) => {
             assistantId: assistantId,
             phoneNumberId: phoneNumberId,
             callbackUrl: `${supabaseUrl}/functions/v1/vapi-call-callback`,
-            tipoTelefonia: 'vapi' // Default para manual
+            tipoTelefonia: 'vapi'
         };
 
         console.log('📤 Enviando para n8n:', JSON.stringify(n8nPayload));
 
-        // 3. Chamar n8n
+        // 🔁 Disparar n8n
         const response = await fetch(n8nWebhookUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'x-source': 'supabase-edge',
+                'x-function-name': 'initiate-vapi-call',
+                'x-system': 'discador-vapi',
+                'x-version': '1.0'
+            },
             body: JSON.stringify(n8nPayload),
         });
 
@@ -93,39 +131,27 @@ Deno.serve(async (req) => {
             throw new Error(`Erro n8n: ${response.status} ${response.statusText}`);
         }
 
-        console.log('✅ Sucesso n8n!');
+        console.log('✅ Webhook n8n enviado com sucesso');
 
-        // 4. Se tiver CampaignContact, atualizar status
-        if (campaignId && contactId) {
-            // Tenta achar o registro na tabela de ligação
-            const { data: cc } = await supabase
-                .from('campaign_contacts')
-                .select('id, tentativas_realizadas')
-                .eq('campaign_id', campaignId)
-                .eq('contact_id', contactId)
-                .maybeSingle();
-
-            if (cc) {
-                await supabase
-                    .from('campaign_contacts')
-                    .update({
-                        status: 'em_andamento',
-                        tentativas_realizadas: (cc.tentativas_realizadas || 0) + 1,
-                        ultima_tentativa: new Date().toISOString()
-                    })
-                    .eq('id', cc.id);
+        return new Response(
+            JSON.stringify({ success: true, message: 'Ligação iniciada' }),
+            {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
             }
-        }
-
-        return new Response(JSON.stringify({ success: true, message: 'Ligação iniciada' }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
+        );
 
     } catch (error: any) {
         console.error('❌ Erro:', error);
-        return new Response(JSON.stringify({ success: false, error: error.message }), {
-            status: 200, // Retornar 200 com erro no body para nao quebrar frontend
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
+
+        return new Response(
+            JSON.stringify({
+                success: false,
+                error: error.message || 'Erro interno'
+            }),
+            {
+                status: 200,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            }
+        );
     }
 });
