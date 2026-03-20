@@ -1,0 +1,17 @@
+.git
+.gitignore
+node_modules
+backend/node_modules
+dist
+backend/dist
+.env
+.env.*
+backend/.env
+backend/.env.*
+*.log
+npm-debug.log*
+.vscode
+.idea
+coverage
+tmp
+temp

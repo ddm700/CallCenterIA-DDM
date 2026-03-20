@@ -1,6 +1,23 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const candidates = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), 'backend/.env'),
+  path.resolve(__dirname, '../../.env'),
+  path.resolve(__dirname, '../../../.env')
+];
+
+for (const envFile of candidates) {
+  if (fs.existsSync(envFile)) {
+    dotenv.config({ path: envFile, override: false });
+  }
+}
 
 function required(name: string): string {
   const value = process.env[name];
@@ -14,5 +31,6 @@ export const env = {
   backendPublicUrl: process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 4000}`,
   supabaseUrl: required('SUPABASE_URL'),
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
-  supabaseServiceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY')
+  supabaseServiceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
+  redisUrl: process.env.REDIS_URL || ''
 };

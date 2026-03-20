@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE_URL = 'http://localhost:4000';
+const DEFAULT_API_BASE_URL = '';
 
 const getEnv = (key: string) => {
   try {
