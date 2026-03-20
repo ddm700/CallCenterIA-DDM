@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { cacheGet, cacheSet } from '../lib/cache.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 
 export const vapiRouter = Router();
@@ -15,6 +16,12 @@ async function getVapiApiKey(): Promise<string | null> {
 
 vapiRouter.get('/resources', async (_req, res) => {
   try {
+    const cacheKey = 'vapi:resources';
+    const cached = await cacheGet<{ assistants: any[]; phoneNumbers: any[] }>(cacheKey);
+    if (cached) {
+      return res.json({ success: true, assistants: cached.assistants, phoneNumbers: cached.phoneNumbers, cached: true });
+    }
+
     const apiKey = await getVapiApiKey();
     if (!apiKey) return res.status(400).json({ success: false, error: 'VAPI API key nao configurada' });
 
@@ -35,7 +42,8 @@ vapiRouter.get('/resources', async (_req, res) => {
     const assistants = Array.isArray(assistantsJson) ? assistantsJson : assistantsJson.results || [];
     const phoneNumbers = Array.isArray(phonesJson) ? phonesJson : phonesJson.results || [];
 
-    return res.json({ success: true, assistants, phoneNumbers });
+    await cacheSet(cacheKey, { assistants, phoneNumbers }, 120);
+    return res.json({ success: true, assistants, phoneNumbers, cached: false });
   } catch (error: any) {
     console.error('[vapi/resources] error', error);
     return res.status(500).json({ success: false, error: error.message || 'Erro interno' });

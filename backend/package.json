@@ -4,9 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "ensure-env": "node scripts/ensure-env.mjs",
+    "predev": "npm run ensure-env",
     "dev": "npm run build && node dist/server.js",
+    "predev:watch": "npm run ensure-env",
     "dev:watch": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
+    "prestart": "npm run ensure-env",
     "start": "node dist/server.js"
   },
   "dependencies": {
@@ -14,7 +18,8 @@
     "cors": "^2.8.5",
     "date-fns-tz": "^3.2.0",
     "dotenv": "^16.6.1",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "ioredis": "^5.8.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

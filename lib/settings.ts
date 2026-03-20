@@ -43,8 +43,8 @@ export const getSupabaseSettings = (): SupabaseSettings => {
     }
   }
   return {
-    url: getEnv('VITE_SUPABASE_URL') || 'https://mkrkkvbseobdqsalrorl.supabase.co',
-    key: getEnv('VITE_SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rcmtrdmJzZW9iZHFzYWxyb3JsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjIzNDcwNTgsImV4cCI6MjA3NzkyMzA1OH0.OaGaavmaKda3LGUIiapB02Nqg7DZz7G7ntuJnvgRnRo'
+    url: getEnv('VITE_SUPABASE_URL') || '',
+    key: getEnv('VITE_SUPABASE_ANON_KEY') || ''
   };
 };
 
@@ -58,8 +58,8 @@ export const getN8nSettings = (): N8nSettings => {
     }
   }
   return {
-    webhookVapi: getEnv('VITE_N8N_WEBHOOK_VAPI') || 'https://n8n-n8n-start.xzz0ed.easypanel.host/webhook/callcenteria',
-    webhookWhatsapp: getEnv('VITE_N8N_WEBHOOK_WHATSAPP') || 'https://seu-n8n.com/webhook/whatsapp',
+    webhookVapi: getEnv('VITE_N8N_WEBHOOK_VAPI') || '',
+    webhookWhatsapp: getEnv('VITE_N8N_WEBHOOK_WHATSAPP') || '',
     token: ''
   };
 };
@@ -74,7 +74,7 @@ export const getVapiSettings = (): VapiSettings => {
     }
   }
   return {
-    apiKey: getEnv('VITE_VAPI_API_KEY') || '332987f4-f832-4542-9fd0-76de02bde971'
+    apiKey: getEnv('VITE_VAPI_API_KEY') || ''
   };
 };
 

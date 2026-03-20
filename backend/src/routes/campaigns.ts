@@ -4,8 +4,13 @@ import { env } from '../config/env.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 
 type ProcessResult = { contactId: string; contactName: string; success: boolean; error?: string };
-const DELAY_BETWEEN_BATCHES_MS = 1000;
+
+// concorrencia e delay entre lotes de contatos
+const DELAY_BETWEEN_BATCHES_MS = 1000; // 25 minutos
 const CONCURRENT_BATCH_SIZE = 10;
+
+// para evitar sobrecarga no VAPI, vamos limitar a 500 chamadas a cada 25 minutos, o que da cerca de 1200 chamadas por hora, considerando tentativas e contatos que nao tem telefone
+const DELAY_BETWEEN_500_BATCHES_MS = 1200000; // 25 minutos
 
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array];
@@ -167,13 +172,40 @@ campaignsRouter.post('/start', async (req, res) => {
     };
 
     const allResults: ProcessResult[] = [];
+    
+    // logica para contemplar ratelimit do n8n e vapi, 
+    // processando em lotes e com pausas de 25min a cada 500 envios 
+    // para evitar sobrecarga e garantir que as chamadas sejam processadas 
+    // corretamente, mesmo para campanhas grandes
+    let processedCount = 0;
     for (let i = 0; i < eligibleContacts.length; i += CONCURRENT_BATCH_SIZE) {
       const batch = eligibleContacts.slice(i, i + CONCURRENT_BATCH_SIZE);
-      const batchResult = await Promise.all(batch.map((contact: any, index: number) => processContact(contact, i + index)));
+
+      const batchResult = await Promise.all(
+        batch.map((contact: any, index: number) =>
+          processContact(contact, i + index)
+        )
+      );
+
       allResults.push(...batchResult);
 
-      if (i + CONCURRENT_BATCH_SIZE < eligibleContacts.length) {
-        await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_BATCHES_MS));
+      processedCount += batch.length;
+
+      const hasMore = i + CONCURRENT_BATCH_SIZE < eligibleContacts.length;
+
+      if (hasMore) {
+        // pausa longa a cada 500
+        if (processedCount % 500 === 0) {
+          console.log(`Atingiu ${processedCount} envios. Pausando 25 minutos...`);
+          await new Promise((resolve) =>
+            setTimeout(resolve, DELAY_BETWEEN_500_BATCHES_MS)
+          );
+        } else {
+          // pausa curta entre lotes
+          await new Promise((resolve) =>
+            setTimeout(resolve, DELAY_BETWEEN_BATCHES_MS)
+          );
+        }
       }
     }
 
