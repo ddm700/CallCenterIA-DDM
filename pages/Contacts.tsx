@@ -382,7 +382,7 @@ export const Contacts: React.FC = () => {
             <p className="text-sm text-slate-500 dark:text-slate-400">Visualize e gerencie leads de todas as campanhas</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="danger" icon={RefreshCw} onClick={fetchData} title="Atualizar Lista" />
+            <Button variant="outline" icon={RefreshCw} onClick={fetchData} title="Atualizar Lista" />
             <Button icon={Plus} onClick={() => setIsCreateOpen(true)}>Novo Contato</Button>
             <Button variant="outline" icon={Upload} onClick={() => setIsImportOpen(true)}>Importar</Button>
           </div>
