@@ -383,7 +383,7 @@ export const Contacts: React.FC = () => {
           </div>
           <div className="flex gap-2">
             <Button variant="outline" icon={RefreshCw} onClick={fetchData} title="Atualizar Lista" />
-            <Button icon={Plus} onClick={() => setIsCreateOpen(true)}>Novo Contato</Button>
+            <Button variant="danger" icon={Plus} onClick={() => setIsCreateOpen(true)}>Novo Contato</Button>
             <Button variant="outline" icon={Upload} onClick={() => setIsImportOpen(true)}>Importar</Button>
           </div>
         </div>
