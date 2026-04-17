@@ -1,0 +1,14 @@
+# Environment variables
+.env
+.env.*
+
+# Node
+node_modules
+npm-debug.log
+
+# Git
+.git
+.gitignore
+
+# Docs
+README.md
