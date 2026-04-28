@@ -1,16 +1,20 @@
 import { Router } from 'express';
 import { format, toZonedTime } from 'date-fns-tz';
 import { env } from '../config/env.js';
+import { createQueuedCallRecord, getBackendPublicUrl } from '../lib/calls.js';
 import { supabaseAdmin } from '../lib/supabase.js';
+import {
+  getDispatchErrorMessage,
+  getN8nWebhookUrl,
+  postWebhookWithRetries,
+  RequestPacer
+} from '../services/callDispatch.js';
 
 type ProcessResult = { contactId: string; contactName: string; success: boolean; error?: string };
 
-// concorrencia e delay entre lotes de contatos
-const DELAY_BETWEEN_BATCHES_MS = 1000; // 25 minutos
-const CONCURRENT_BATCH_SIZE = 10;
-
-// para evitar sobrecarga no VAPI, vamos limitar a 500 chamadas a cada 25 minutos, o que da cerca de 1200 chamadas por hora, considerando tentativas e contatos que nao tem telefone
-const DELAY_BETWEEN_500_BATCHES_MS = 1200000; // 25 minutos
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const SUPABASE_PAGE_SIZE = 1000;
+const activeCampaignRuns = new Set<string>();
 
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array];
@@ -21,35 +25,67 @@ function shuffleArray<T>(array: T[]): T[] {
   return shuffled;
 }
 
-export const campaignsRouter = Router();
+async function processWithConcurrency<T, TResult>(
+  items: T[],
+  concurrency: number,
+  handler: (item: T, index: number) => Promise<TResult>
+): Promise<TResult[]> {
+  const results = new Array<TResult>(items.length);
+  let nextIndex = 0;
 
-campaignsRouter.post('/start', async (req, res) => {
-  try {
-    const { campaignId } = req.body as { campaignId?: string };
-    if (!campaignId) return res.status(400).json({ success: false, error: 'campaignId obrigatorio' });
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
 
-    const { data: campaign, error: campaignError } = await supabaseAdmin.from('campaigns').select('*').eq('id', campaignId).single();
-    if (campaignError || !campaign) throw new Error('Campanha nao encontrada');
-    if (!campaign.ativa) throw new Error('Campanha nao esta ativa');
+        if (currentIndex >= items.length) {
+          return;
+        }
 
-    if (!campaign.ignore_horario && campaign.janela_inicio && campaign.janela_fim) {
-      const brasiliaTime = toZonedTime(new Date(), 'America/Sao_Paulo');
-      const currentHour = format(brasiliaTime, 'HH:mm', { timeZone: 'America/Sao_Paulo' });
-      if (currentHour < campaign.janela_inicio || currentHour > campaign.janela_fim) {
-        throw new Error(`Fora do horario (${campaign.janela_inicio} - ${campaign.janela_fim})`);
+        results[currentIndex] = await handler(items[currentIndex], currentIndex);
       }
-    }
+    })
+  );
 
-    let vapiLines: string[] = [];
-    if (campaign.tipo_telefonia === 'vapi') {
-      if (!campaign.assistant_vapi_id || !campaign.linha_vapi_id) {
-        throw new Error('Campanha sem configuracao VAPI completa');
-      }
-      vapiLines = shuffleArray(String(campaign.linha_vapi_id).split(',').filter(Boolean));
-      if (vapiLines.length === 0) throw new Error('Nenhuma linha VAPI configurada');
-    }
+  return results;
+}
 
-    const { data: campaignContacts, error: contactsError } = await supabaseAdmin
+async function executeCampaignStart(campaignId: string): Promise<{
+  totalProcessed: number;
+  successful: number;
+  failed: number;
+}> {
+  const { data: campaign, error: campaignError } = await supabaseAdmin
+    .from('campaigns')
+    .select('*')
+    .eq('id', campaignId)
+    .single();
+  if (campaignError || !campaign) throw new Error('Campanha nao encontrada');
+  if (!campaign.ativa) throw new Error('Campanha nao esta ativa');
+
+  if (!campaign.ignore_horario && campaign.janela_inicio && campaign.janela_fim) {
+    const brasiliaTime = toZonedTime(new Date(), 'America/Sao_Paulo');
+    const currentHour = format(brasiliaTime, 'HH:mm', { timeZone: 'America/Sao_Paulo' });
+    if (currentHour < campaign.janela_inicio || currentHour > campaign.janela_fim) {
+      throw new Error(`Fora do horario (${campaign.janela_inicio} - ${campaign.janela_fim})`);
+    }
+  }
+
+  let vapiLines: string[] = [];
+  if (campaign.tipo_telefonia === 'vapi') {
+    if (!campaign.assistant_vapi_id || !campaign.linha_vapi_id) {
+      throw new Error('Campanha sem configuracao VAPI completa');
+    }
+    vapiLines = shuffleArray(String(campaign.linha_vapi_id).split(',').filter(Boolean));
+    if (vapiLines.length === 0) throw new Error('Nenhuma linha VAPI configurada');
+  }
+
+  // Paginacao: busca todos os contatos pendentes em paginas de 1000
+  const campaignContacts: any[] = [];
+  for (let from = 0; ; from += SUPABASE_PAGE_SIZE) {
+    const { data, error: contactsError } = await supabaseAdmin
       .from('campaign_contacts')
       .select(
         `
@@ -68,159 +104,194 @@ campaignsRouter.post('/start', async (req, res) => {
         `
       )
       .eq('campaign_id', campaignId)
-      .in('status', ['pendente', 'em_andamento']);
+      .eq('status', 'pendente')
+      .range(from, from + SUPABASE_PAGE_SIZE - 1);
 
     if (contactsError) throw new Error(`Erro ao buscar contatos: ${contactsError.message}`);
-    if (!campaignContacts || campaignContacts.length === 0) {
-      return res.json({ success: true, message: 'Nenhum contato pendente', totalProcessed: 0, successful: 0, failed: 0 });
+    if (!data || data.length === 0) break;
+
+    campaignContacts.push(...data);
+
+    if (data.length < SUPABASE_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  if (campaignContacts.length === 0) {
+    return { totalProcessed: 0, successful: 0, failed: 0 };
+  }
+
+  const now = new Date();
+  const eligibleContacts = campaignContacts.filter((cc: any) => {
+    if ((cc.tentativas_realizadas || 0) >= campaign.max_tentativas) return false;
+    if (cc.ultima_tentativa) {
+      const minutes = (now.getTime() - new Date(cc.ultima_tentativa).getTime()) / (1000 * 60);
+      if (minutes < campaign.intervalo_minutos) return false;
+    }
+    return true;
+  });
+
+  if (eligibleContacts.length === 0) {
+    return { totalProcessed: 0, successful: 0, failed: 0 };
+  }
+
+  const n8nWebhookUrl = await getN8nWebhookUrl();
+  const resolvedBackendPublicUrl = await getBackendPublicUrl();
+  const callbackUrl = `${resolvedBackendPublicUrl}/api/webhooks/vapi/callback`;
+  const pacer = new RequestPacer();
+
+  const processContact = async (cc: any, lineIndex: number): Promise<ProcessResult> => {
+    const contact = Array.isArray(cc.contacts) ? cc.contacts[0] : cc.contacts;
+    const phoneNumber = contact?.telefone ?? null;
+
+    if (!phoneNumber || !contact) {
+      return {
+        contactId: contact?.id || cc.contact_id,
+        contactName: contact?.nome || 'Desconhecido',
+        success: false,
+        error: 'Sem telefone cadastrado ou contato nao encontrado'
+      };
     }
 
-    const now = new Date();
-    const eligibleContacts = campaignContacts.filter((cc: any) => {
-      if ((cc.tentativas_realizadas || 0) >= campaign.max_tentativas) return false;
-      if (cc.ultima_tentativa) {
-        const minutes = (now.getTime() - new Date(cc.ultima_tentativa).getTime()) / (1000 * 60);
-        if (minutes < campaign.intervalo_minutos) return false;
-      }
-      return true;
-    });
+    try {
+      const linhaVapiId = campaign.tipo_telefonia === 'vapi' ? vapiLines[lineIndex % vapiLines.length] : null;
+      const phoneNumberId = linhaVapiId || String(campaign.linha_vapi_id || '').split(',')[0];
 
-    if (eligibleContacts.length === 0) {
-      return res.json({ success: true, message: 'Nenhum contato elegivel', totalProcessed: 0, successful: 0, failed: 0 });
+      await createQueuedCallRecord({
+        campaignContactId: cc.id,
+        contactPhoneId: null,
+        customerNumber: phoneNumber,
+        campaignName: campaign.nome,
+        customerCpf: contact.cpf,
+        customerName: contact.nome,
+        assistantId: campaign.assistant_vapi_id,
+        phoneNumberId
+      });
+
+      const n8nPayload = {
+        contactId: contact.id,
+        campaignContactId: cc.id,
+        phoneId: null,
+        campaignId: campaign.id,
+        customerNumber: phoneNumber,
+        customerName: contact.nome,
+        cpf: contact.cpf,
+        customerCpf: contact.cpf,
+        assistantId: campaign.assistant_vapi_id,
+        phoneNumberId,
+        callbackUrl,
+        tipoTelefonia: campaign.tipo_telefonia
+      };
+
+      const dispatchResult = await postWebhookWithRetries(n8nWebhookUrl, n8nPayload, pacer);
+      if (!dispatchResult.ok) {
+        throw new Error(getDispatchErrorMessage(dispatchResult));
+      }
+
+      const { error: updateError } = await supabaseAdmin
+        .from('campaign_contacts')
+        .update({
+          status: 'em_andamento',
+          tentativas_realizadas: (cc.tentativas_realizadas || 0) + 1,
+          ultima_tentativa: new Date().toISOString()
+        })
+        .eq('id', cc.id);
+      if (updateError) console.warn('Nao foi possivel atualizar campaign_contacts', updateError.message);
+
+      return { contactId: contact.id, contactName: contact.nome, success: true };
+    } catch (error: any) {
+      return { contactId: contact.id, contactName: contact.nome, success: false, error: error.message };
+    }
+  };
+
+  const allResults: ProcessResult[] = [];
+
+  console.log(
+    `[campaigns/start] iniciando ${eligibleContacts.length} contatos ` +
+      `com concorrencia=${env.campaignStartMaxConcurrency}, ` +
+      `batchSize=${env.campaignStartBatchSize}, ` +
+      `requestIntervalMs=${env.campaignStartRequestIntervalMs}, ` +
+      `pauseMs=${env.campaignStartPauseMs}`
+  );
+
+  for (let i = 0; i < eligibleContacts.length; i += env.campaignStartBatchSize) {
+    const batch = eligibleContacts.slice(i, i + env.campaignStartBatchSize);
+
+    const batchResult = await processWithConcurrency(
+      batch,
+      env.campaignStartMaxConcurrency,
+      (contact: any, index: number) => processContact(contact, i + index)
+    );
+
+    allResults.push(...batchResult);
+
+    const processedCount = allResults.length;
+    const successfulCount = allResults.filter((result) => result.success).length;
+    const failedCount = processedCount - successfulCount;
+    console.log(
+      `[campaigns/start] lote finalizado: processados=${processedCount} ` +
+        `sucesso=${successfulCount} falhas=${failedCount}`
+    );
+
+    const hasMore = i + env.campaignStartBatchSize < eligibleContacts.length;
+
+    if (hasMore && env.campaignStartPauseMs > 0) {
+      console.log(`[campaigns/start] pausando ${env.campaignStartPauseMs} ms antes do proximo lote`);
+      await sleep(env.campaignStartPauseMs);
+    }
+  }
+
+  const successful = allResults.filter((r) => r.success).length;
+  const failed = allResults.filter((r) => !r.success).length;
+
+  return {
+    totalProcessed: allResults.length,
+    successful,
+    failed
+  };
+}
+
+export const campaignsRouter = Router();
+
+campaignsRouter.post('/start', async (req, res) => {
+  const { campaignId } = req.body as { campaignId?: string };
+
+  try {
+    if (!campaignId) return res.status(400).json({ success: false, error: 'campaignId obrigatorio' });
+
+    if (activeCampaignRuns.has(campaignId)) {
+      return res.status(409).json({
+        success: false,
+        error: 'Ja existe uma execucao em andamento para esta campanha'
+      });
     }
 
-    const contactIds = eligibleContacts.map((cc: any) => cc.contact_id);
-    const { data: phones } = await supabaseAdmin
-      .from('contact_phones')
-      .select('*')
-      .in('contact_id', contactIds)
-      .order('prioridade', { ascending: true });
+    activeCampaignRuns.add(campaignId);
 
-    const phonesByContactId = new Map<string, any>();
-    phones?.forEach((phone: any) => {
-      if (!phonesByContactId.has(phone.contact_id)) phonesByContactId.set(phone.contact_id, phone);
-    });
-
-    const { data: n8nSetting } = await supabaseAdmin
-      .from('app_settings')
-      .select('setting_value')
-      .eq('setting_key', 'n8n_webhook_url')
-      .limit(1)
-      .maybeSingle();
-
-    const n8nWebhookUrl =
-      n8nSetting?.setting_value || 'https://n8n-n8n-start.xzz0ed.easypanel.host/webhook/callcenteria';
-    const callbackUrl = `${env.backendPublicUrl}/api/webhooks/vapi/callback`;
-
-    const processContact = async (cc: any, lineIndex: number): Promise<ProcessResult> => {
-      const contact = Array.isArray(cc.contacts) ? cc.contacts[0] : cc.contacts;
-      let phoneData = phonesByContactId.get(contact?.id);
-      let phoneNumber = phoneData?.numero;
-
-      if (!phoneNumber && contact?.telefone) {
-        phoneNumber = contact.telefone;
-        phoneData = { id: `fallback-${contact.id}` };
-      }
-
-      if (!phoneNumber || !contact) {
-        return {
-          contactId: contact?.id || cc.contact_id,
-          contactName: contact?.nome || 'Desconhecido',
-          success: false,
-          error: 'Sem telefone cadastrado ou contato nao encontrado'
-        };
-      }
-
+    // Retorna 202 imediatamente e processa em background
+    void (async () => {
       try {
-        const linhaVapiId = campaign.tipo_telefonia === 'vapi' ? vapiLines[lineIndex % vapiLines.length] : null;
-
-        const n8nPayload = {
-          contactId: contact.id,
-          campaignContactId: cc.id,
-          phoneId: phoneData?.id || null,
-          campaignId: campaign.id,
-          customerNumber: phoneNumber,
-          customerName: contact.nome,
-          customerCpf: contact.cpf,
-          assistantId: campaign.assistant_vapi_id,
-          phoneNumberId: linhaVapiId || String(campaign.linha_vapi_id || '').split(',')[0],
-          callbackUrl,
-          tipoTelefonia: campaign.tipo_telefonia
-        };
-
-        const response = await fetch(n8nWebhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(n8nPayload)
-        });
-        if (!response.ok) throw new Error(`Erro n8n: ${response.status} ${response.statusText}`);
-
-        const { error: updateError } = await supabaseAdmin
-          .from('campaign_contacts')
-          .update({
-            status: 'em_andamento',
-            tentativas_realizadas: (cc.tentativas_realizadas || 0) + 1,
-            ultima_tentativa: new Date().toISOString()
-          })
-          .eq('id', cc.id);
-        if (updateError) console.warn('Nao foi possivel atualizar campaign_contacts', updateError.message);
-
-        return { contactId: contact.id, contactName: contact.nome, success: true };
+        const summary = await executeCampaignStart(campaignId);
+        console.log(
+          `[campaigns/start] execucao concluida campaign=${campaignId} ` +
+            `processados=${summary.totalProcessed} sucesso=${summary.successful} falhas=${summary.failed}`
+        );
       } catch (error: any) {
-        return { contactId: contact.id, contactName: contact.nome, success: false, error: error.message };
+        console.error('[campaigns/start] background error', error);
+      } finally {
+        activeCampaignRuns.delete(campaignId);
       }
-    };
+    })();
 
-    const allResults: ProcessResult[] = [];
-    
-    // logica para contemplar ratelimit do n8n e vapi, 
-    // processando em lotes e com pausas de 25min a cada 500 envios 
-    // para evitar sobrecarga e garantir que as chamadas sejam processadas 
-    // corretamente, mesmo para campanhas grandes
-    let processedCount = 0;
-    for (let i = 0; i < eligibleContacts.length; i += CONCURRENT_BATCH_SIZE) {
-      const batch = eligibleContacts.slice(i, i + CONCURRENT_BATCH_SIZE);
-
-      const batchResult = await Promise.all(
-        batch.map((contact: any, index: number) =>
-          processContact(contact, i + index)
-        )
-      );
-
-      allResults.push(...batchResult);
-
-      processedCount += batch.length;
-
-      const hasMore = i + CONCURRENT_BATCH_SIZE < eligibleContacts.length;
-
-      if (hasMore) {
-        // pausa longa a cada 500
-        if (processedCount % 500 === 0) {
-          console.log(`Atingiu ${processedCount} envios. Pausando 25 minutos...`);
-          await new Promise((resolve) =>
-            setTimeout(resolve, DELAY_BETWEEN_500_BATCHES_MS)
-          );
-        } else {
-          // pausa curta entre lotes
-          await new Promise((resolve) =>
-            setTimeout(resolve, DELAY_BETWEEN_BATCHES_MS)
-          );
-        }
-      }
-    }
-
-    const successful = allResults.filter((r) => r.success).length;
-    const failed = allResults.filter((r) => !r.success).length;
-
-    return res.json({
+    return res.status(202).json({
       success: true,
-      message: `Processamento concluido: ${successful} iniciadas, ${failed} falhas`,
-      totalProcessed: allResults.length,
-      successful,
-      failed,
-      results: allResults
+      message: 'Processamento iniciado em background',
+      campaignId
     });
   } catch (error: any) {
+    if (campaignId) {
+      activeCampaignRuns.delete(campaignId);
+    }
     console.error('[campaigns/start] error', error);
     return res.status(500).json({ success: false, error: error.message || 'Erro ao iniciar campanha' });
   }
