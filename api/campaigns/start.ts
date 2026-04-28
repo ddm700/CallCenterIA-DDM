@@ -216,7 +216,7 @@ async function createQueuedCallRecord(
     phoneNumberId: string | null;
   }
 ): Promise<void> {
-  const { error } = await supabase.from('calls').insert({
+  await supabase.from('calls').insert({
     campaign_contact_id: input.campaignContactId,
     contact_phone_id: null,
     customer_number: input.customerNumber,
@@ -227,7 +227,6 @@ async function createQueuedCallRecord(
     phone_number_id: input.phoneNumberId,
     status: 'queued',
   });
-  if (error) throw new Error(`Erro ao inserir chamada queued: ${error.message}`);
 }
 
 // ---------------------------------------------------------------------------
