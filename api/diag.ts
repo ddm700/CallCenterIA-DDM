@@ -13,18 +13,35 @@ export default async function handler(req: any, res: any) {
       FRONTEND_ORIGIN: process.env.FRONTEND_ORIGIN || 'NAO DEFINIDA',
     },
     db: { ok: false, error: null as string | null },
+    campaigns: [] as any[],
   };
 
   if (supabaseUrl && serviceKey) {
     try {
       const client = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+
       const { count, error } = await client
         .from('campaigns')
         .select('*', { count: 'exact', head: true });
 
-      result.db = error
-        ? { ok: false, error: error.message }
-        : { ok: true, campaigns_count: count };
+      if (error) {
+        result.db = { ok: false, error: error.message };
+      } else {
+        result.db = { ok: true, campaigns_count: count };
+
+        const { data: camps } = await client
+          .from('campaigns')
+          .select('id, nome, ativa, status')
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        result.campaigns = (camps || []).map((c: any) => ({
+          id: c.id,
+          nome: c.nome,
+          ativa: c.ativa,
+          status: c.status,
+        }));
+      }
     } catch (e: any) {
       result.db = { ok: false, error: e.message };
     }
