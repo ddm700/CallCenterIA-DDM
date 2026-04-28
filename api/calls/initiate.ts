@@ -71,7 +71,7 @@ export default async function handler(req: any, res: any) {
     const callbackUrl = `${backendPublicUrl}/api/webhooks/vapi/callback`;
 
     // INSERT em calls antes de despachar
-    const { data: callRecord } = await supabase.from('calls').insert({
+    const { data: callRecord, error: callInsertError } = await supabase.from('calls').insert({
       campaign_contact_id: campaignContactId,
       contact_phone_id: null,
       customer_number: customerNumber,
@@ -82,6 +82,7 @@ export default async function handler(req: any, res: any) {
       phone_number_id: phoneNumberId,
       status: 'queued',
     }).select('id').maybeSingle();
+    if (callInsertError) throw new Error(`Erro ao inserir chamada queued: ${callInsertError.message}`);
 
     const n8nPayload = {
       contactId: contactId || null, campaignContactId,
