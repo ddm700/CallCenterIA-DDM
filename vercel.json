@@ -1,7 +1,6 @@
 {
   "version": 2,
-  "installCommand": "npm install && npm install --prefix backend",
-  "buildCommand": "npm run build && npm --prefix backend run build",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "env": {
     "FRONTEND_ORIGIN": "*"
