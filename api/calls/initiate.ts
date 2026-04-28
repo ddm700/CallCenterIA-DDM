@@ -70,6 +70,19 @@ export default async function handler(req: any, res: any) {
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
     const callbackUrl = `${backendPublicUrl}/api/webhooks/vapi/callback`;
 
+    // INSERT em calls antes de despachar
+    const { data: callRecord } = await supabase.from('calls').insert({
+      campaign_contact_id: campaignContactId,
+      contact_phone_id: null,
+      customer_number: customerNumber,
+      campanha: campaignId ? null : 'Direta',
+      cpf,
+      cliente: customerName,
+      assistant_id: assistantId,
+      phone_number_id: phoneNumberId,
+      status: 'queued',
+    }).select('id').maybeSingle();
+
     const n8nPayload = {
       contactId: contactId || null, campaignContactId,
       campaignId: campaignId || 'manual',
@@ -89,7 +102,7 @@ export default async function handler(req: any, res: any) {
 
     if (!response.ok) throw new Error(`Erro n8n: ${response.status} ${response.statusText}`);
 
-    return res.json({ success: true, message: 'Ligação iniciada' });
+    return res.json({ success: true, message: 'Ligação iniciada', callId: callRecord?.id ?? null });
   } catch (error: any) {
     console.error('[calls/initiate] error', error);
     return res.status(500).json({ success: false, error: error.message || 'Erro interno' });
