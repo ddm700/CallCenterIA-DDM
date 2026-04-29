@@ -1,4 +1,3 @@
-import { waitUntil } from '@vercel/functions';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { format, toZonedTime } from 'date-fns-tz';
 
@@ -169,6 +168,44 @@ function getSupabaseAdmin(): SupabaseClient {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
+type ServerLogLevel = 'info' | 'warn' | 'error' | 'success';
+
+function serializeError(error: unknown): Record<string, unknown> | null {
+  if (!error) return null;
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack ?? null,
+    };
+  }
+  if (typeof error === 'object') return error as Record<string, unknown>;
+  return { value: String(error) };
+}
+
+async function writeServerLog(
+  supabase: SupabaseClient,
+  level: ServerLogLevel,
+  message: string,
+  details?: Record<string, unknown>
+): Promise<void> {
+  const payload = {
+    level,
+    category: 'CampaignDispatch',
+    message,
+    details: details ?? null,
+  };
+
+  try {
+    const { error } = await supabase.from('system_logs').insert([payload]);
+    if (error) {
+      console.error('[campaigns/start] failed to persist system log', error.message, payload);
+    }
+  } catch (error) {
+    console.error('[campaigns/start] exception persisting system log', error, payload);
+  }
+}
+
 async function getN8nWebhookUrl(supabase: SupabaseClient): Promise<string> {
   const { data } = await supabase
     .from('app_settings')
@@ -216,8 +253,8 @@ async function createQueuedCallRecord(
     assistantId: string | null;
     phoneNumberId: string | null;
   }
-): Promise<void> {
-  await supabase.from('calls').insert({
+): Promise<{ id: string | null; error?: string }> {
+  const { data, error } = await supabase.from('calls').insert({
     campaign_contact_id: input.campaignContactId,
     contact_phone_id: null,
     customer_number: input.customerNumber,
@@ -227,7 +264,13 @@ async function createQueuedCallRecord(
     assistant_id: input.assistantId,
     phone_number_id: input.phoneNumberId,
     status: 'queued',
-  });
+  }).select('id').maybeSingle();
+
+  if (error) {
+    return { id: null, error: error.message };
+  }
+
+  return { id: data?.id ?? null };
 }
 
 // ---------------------------------------------------------------------------
@@ -242,11 +285,27 @@ type ProcessResult = { contactId: string; contactName: string; success: boolean;
 
 async function executeCampaignStart(campaignId: string): Promise<{ totalProcessed: number; successful: number; failed: number }> {
   const supabase = getSupabaseAdmin();
+  const runtimeDetails = {
+    campaignId,
+    vercelUrl: process.env.VERCEL_URL || null,
+    vercelRegion: process.env.VERCEL_REGION || null,
+    backendPublicUrlEnv: process.env.BACKEND_PUBLIC_URL || null,
+  };
+
+  await writeServerLog(supabase, 'info', 'Campaign dispatch background started', runtimeDetails);
 
   const { data: campaign, error: campaignError } = await supabase
     .from('campaigns').select('*').eq('id', campaignId).single();
   if (campaignError || !campaign) throw new Error('Campanha não encontrada');
   if (!campaign.ativa) throw new Error('Campanha não está ativa');
+
+  await writeServerLog(supabase, 'info', 'Campaign loaded for dispatch', {
+    campaignId,
+    campaignName: campaign.nome ?? null,
+    tipoTelefonia: campaign.tipo_telefonia ?? null,
+    ativa: Boolean(campaign.ativa),
+    ignoreHorario: Boolean(campaign.ignore_horario),
+  });
 
   if (!campaign.ignore_horario && campaign.janela_inicio && campaign.janela_fim) {
     const brasiliaTime = toZonedTime(new Date(), 'America/Sao_Paulo');
@@ -281,7 +340,10 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
     if (data.length < SUPABASE_PAGE_SIZE) break;
   }
 
-  if (campaignContacts.length === 0) return { totalProcessed: 0, successful: 0, failed: 0 };
+  if (campaignContacts.length === 0) {
+    await writeServerLog(supabase, 'warn', 'No pending campaign contacts found', { campaignId });
+    return { totalProcessed: 0, successful: 0, failed: 0 };
+  }
 
   const now = new Date();
   const eligibleContacts = campaignContacts.filter((cc: any) => {
@@ -293,12 +355,30 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
     return true;
   });
 
-  if (eligibleContacts.length === 0) return { totalProcessed: 0, successful: 0, failed: 0 };
+  if (eligibleContacts.length === 0) {
+    await writeServerLog(supabase, 'warn', 'No eligible campaign contacts after filtering', {
+      campaignId,
+      pendingCount: campaignContacts.length,
+    });
+    return { totalProcessed: 0, successful: 0, failed: 0 };
+  }
 
   const n8nWebhookUrl = await getN8nWebhookUrl(supabase);
   const backendPublicUrl = await getBackendPublicUrl(supabase);
   const callbackUrl = `${backendPublicUrl}/api/webhooks/vapi/callback`;
   const pacer = new RequestPacer();
+
+  await writeServerLog(supabase, 'info', 'Dispatch prerequisites resolved', {
+    campaignId,
+    pendingCount: campaignContacts.length,
+    eligibleCount: eligibleContacts.length,
+    n8nWebhookUrl,
+    callbackUrl,
+    maxConcurrency: cfg.maxConcurrency,
+    batchSize: cfg.batchSize,
+    requestIntervalMs: cfg.requestIntervalMs,
+    pauseMs: cfg.pauseMs,
+  });
 
   console.log(
     `[campaigns/start] iniciando ${eligibleContacts.length} contatos ` +
@@ -318,7 +398,7 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
       const linhaVapiId = campaign.tipo_telefonia === 'vapi' ? vapiLines[lineIndex % vapiLines.length] : null;
       const phoneNumberId = linhaVapiId || String(campaign.linha_vapi_id || '').split(',')[0];
 
-      await createQueuedCallRecord(supabase, {
+      const queuedCall = await createQueuedCallRecord(supabase, {
         campaignContactId: cc.id,
         customerNumber: phoneNumber,
         campaignName: campaign.nome,
@@ -327,6 +407,16 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
         assistantId: campaign.assistant_vapi_id ?? null,
         phoneNumberId,
       });
+
+      if (queuedCall.error) {
+        await writeServerLog(supabase, 'warn', 'Failed to insert queued call record', {
+          campaignId,
+          campaignContactId: cc.id,
+          contactId: contact.id,
+          phoneNumber,
+          error: queuedCall.error,
+        });
+      }
 
       const result = await postWebhookWithRetries(n8nWebhookUrl, {
         contactId: contact.id,
@@ -345,11 +435,20 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
 
       if (!result.ok) throw new Error(result.error);
 
-      await supabase.from('campaign_contacts').update({
+      const { error: updateError } = await supabase.from('campaign_contacts').update({
         status: 'em_andamento',
         tentativas_realizadas: (cc.tentativas_realizadas || 0) + 1,
         ultima_tentativa: new Date().toISOString(),
       }).eq('id', cc.id);
+
+      if (updateError) {
+        await writeServerLog(supabase, 'warn', 'Failed to update campaign contact after dispatch', {
+          campaignId,
+          campaignContactId: cc.id,
+          contactId: contact.id,
+          error: updateError.message,
+        });
+      }
 
       return { contactId: contact.id, contactName: contact.nome, success: true };
     } catch (e: any) {
@@ -366,6 +465,23 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
     const ok = allResults.filter((r) => r.success).length;
     console.log(`[campaigns/start] lote: processados=${allResults.length} sucesso=${ok} falhas=${allResults.length - ok}`);
 
+    const failedSamples = batchResult
+      .filter((result) => !result.success)
+      .slice(0, 5)
+      .map((result) => ({
+        contactId: result.contactId,
+        contactName: result.contactName,
+        error: result.error ?? null,
+      }));
+
+    await writeServerLog(supabase, failedSamples.length > 0 ? 'warn' : 'info', 'Campaign dispatch batch finished', {
+      campaignId,
+      processed: allResults.length,
+      successful: ok,
+      failed: allResults.length - ok,
+      failedSamples,
+    });
+
     const hasMore = i + cfg.batchSize < eligibleContacts.length;
     if (hasMore && cfg.pauseMs > 0) {
       console.log(`[campaigns/start] pausando ${cfg.pauseMs}ms antes do próximo lote`);
@@ -373,11 +489,18 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
     }
   }
 
-  return {
+  const summary = {
     totalProcessed: allResults.length,
     successful: allResults.filter((r) => r.success).length,
     failed: allResults.filter((r) => !r.success).length,
   };
+
+  await writeServerLog(supabase, summary.failed > 0 ? 'warn' : 'success', 'Campaign dispatch finished', {
+    campaignId,
+    ...summary,
+  });
+
+  return summary;
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +515,7 @@ export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ success: false, error: 'Método não permitido' });
 
   const { campaignId } = req.body as { campaignId?: string };
+  const supabase = getSupabaseAdmin();
 
   if (!campaignId) return res.status(400).json({ success: false, error: 'campaignId obrigatorio' });
 
@@ -401,17 +525,29 @@ export default async function handler(req: any, res: any) {
 
   activeCampaignRuns.add(campaignId);
 
-  // Vincula o processamento ao lifecycle da Vercel Function.
-  waitUntil((async () => {
+  await writeServerLog(supabase, 'info', 'Campaign start request accepted', {
+    campaignId,
+    method: req.method,
+    hasBody: Boolean(req.body),
+    vercelUrl: process.env.VERCEL_URL || null,
+    vercelRegion: process.env.VERCEL_REGION || null,
+  });
+
+  // Inicia processamento em background e retorna 202 imediatamente
+  void (async () => {
     try {
       const summary = await executeCampaignStart(campaignId);
       console.log(`[campaigns/start] concluído campaign=${campaignId} processados=${summary.totalProcessed} sucesso=${summary.successful} falhas=${summary.failed}`);
     } catch (e: any) {
       console.error('[campaigns/start] background error', e);
+      await writeServerLog(supabase, 'error', 'Campaign dispatch background error', {
+        campaignId,
+        error: serializeError(e),
+      });
     } finally {
       activeCampaignRuns.delete(campaignId);
     }
-  })());
+  })();
 
   return res.status(202).json({
     success: true,
