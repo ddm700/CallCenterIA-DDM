@@ -8,13 +8,21 @@ type VapiResourcesResponse = {
 };
 
 export const vapiService = {
-  async getAssistants(): Promise<VapiAssistant[]> {
+  async getResources(): Promise<{ assistants: VapiAssistant[]; phoneNumbers: VapiPhoneNumber[] }> {
     const data = await apiRequest<VapiResourcesResponse>('/api/vapi/resources', { method: 'GET' });
-    return Array.isArray(data.assistants) ? data.assistants : [];
+    return {
+      assistants: Array.isArray(data.assistants) ? data.assistants : [],
+      phoneNumbers: Array.isArray(data.phoneNumbers) ? data.phoneNumbers : []
+    };
+  },
+
+  async getAssistants(): Promise<VapiAssistant[]> {
+    const data = await this.getResources();
+    return data.assistants;
   },
 
   async getPhoneNumbers(): Promise<VapiPhoneNumber[]> {
-    const data = await apiRequest<VapiResourcesResponse>('/api/vapi/resources', { method: 'GET' });
-    return Array.isArray(data.phoneNumbers) ? data.phoneNumbers : [];
+    const data = await this.getResources();
+    return data.phoneNumbers;
   }
 };

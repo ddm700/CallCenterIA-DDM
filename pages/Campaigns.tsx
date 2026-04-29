@@ -24,6 +24,7 @@ export const Campaigns: React.FC = () => {
   const [assistants, setAssistants] = useState<VapiAssistant[]>([]);
   const [phoneNumbers, setPhoneNumbers] = useState<VapiPhoneNumber[]>([]);
   const [loadingVapi, setLoadingVapi] = useState(false);
+  const [vapiError, setVapiError] = useState<string | null>(null);
 
   // Campaign Form State
   const initialFormState = {
@@ -57,15 +58,24 @@ export const Campaigns: React.FC = () => {
 
   const fetchVapiData = async () => {
     setLoadingVapi(true);
+    setVapiError(null);
     try {
-      const [assists, phones] = await Promise.all([
-        vapiService.getAssistants(),
-        vapiService.getPhoneNumbers()
-      ]);
-      setAssistants(assists);
-      setPhoneNumbers(phones);
-    } catch (error) {
+      const resources = await vapiService.getResources();
+      setAssistants(resources.assistants);
+      setPhoneNumbers(resources.phoneNumbers);
+
+      if (resources.assistants.length === 0 || resources.phoneNumbers.length === 0) {
+        const missingResources: string[] = [];
+        if (resources.phoneNumbers.length === 0) missingResources.push('linhas');
+        if (resources.assistants.length === 0) missingResources.push('assistentes');
+
+        setVapiError(`Nenhum recurso VAPI encontrado para: ${missingResources.join(' e ')}.`);
+      }
+    } catch (error: any) {
       console.error(error);
+      setAssistants([]);
+      setPhoneNumbers([]);
+      setVapiError(error?.message || 'Erro ao carregar recursos da VAPI.');
     } finally {
       setLoadingVapi(false);
     }
@@ -87,6 +97,7 @@ export const Campaigns: React.FC = () => {
   const openCreateModal = () => {
     setEditingId(null);
     setFormData(initialFormState);
+    setVapiError(null);
     setIsModalOpen(true);
   };
 
@@ -105,6 +116,7 @@ export const Campaigns: React.FC = () => {
       endTime: campaign.endTime,
       startActive: campaign.active
     });
+    setVapiError(null);
     setIsModalOpen(true);
   };
 
@@ -415,7 +427,13 @@ export const Campaigns: React.FC = () => {
                   onChange={(e) => setFormData({ ...formData, vapiPhoneId: e.target.value })}
                   disabled={loadingVapi}
                 >
-                  <option value="">{loadingVapi ? 'Carregando...' : 'Selecione uma linha...'}</option>
+                  <option value="">
+                    {loadingVapi
+                      ? 'Carregando...'
+                      : phoneNumbers.length === 0
+                        ? 'Nenhuma linha encontrada'
+                        : 'Selecione uma linha...'}
+                  </option>
                   {phoneNumbers.map(phone => (
                     <option key={phone.id} value={phone.id}>
                       {phone.number} {phone.name ? `(${phone.name})` : ''}
@@ -435,13 +453,24 @@ export const Campaigns: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, vapiAssistantId: e.target.value })}
                 disabled={loadingVapi}
               >
-                <option value="">{loadingVapi ? 'Carregando...' : 'Selecione um assistente...'}</option>
+                <option value="">
+                  {loadingVapi
+                    ? 'Carregando...'
+                    : assistants.length === 0
+                      ? 'Nenhum assistente encontrado'
+                      : 'Selecione um assistente...'}
+                </option>
                 {assistants.map(assistant => (
                   <option key={assistant.id} value={assistant.id}>
                     {assistant.name || assistant.model?.model || 'Assistente sem nome'} ({assistant.id.slice(0, 5)}...)
                   </option>
                 ))}
               </select>
+              {vapiError && (
+                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                  {vapiError} Verifique a chave VAPI em Configurações e se a API `/api/vapi/resources` está respondendo.
+                </p>
+              )}
             </div>
           )}
 
