@@ -47,6 +47,7 @@ export const Settings: React.FC = () => {
         const newN8n = { ...getN8nSettings() };
         // Check multiple possible keys for n8n webhook
         if (dbSettings['n8n_webhook_vapi']) newN8n.webhookVapi = dbSettings['n8n_webhook_vapi'];
+        else if (dbSettings['n8n_webhook_url']) newN8n.webhookVapi = dbSettings['n8n_webhook_url'];
         else if (dbSettings['webhook_url']) newN8n.webhookVapi = dbSettings['webhook_url']; // Fallback key
         
         if (dbSettings['n8n_webhook_whatsapp']) newN8n.webhookWhatsapp = dbSettings['n8n_webhook_whatsapp'];
@@ -73,9 +74,9 @@ export const Settings: React.FC = () => {
     try {
         saveN8nSettings(n8nConfig);
         
-        // Save to DB with multiple keys to ensure compatibility with Edge Functions
-        // We save both 'n8n_webhook_vapi' and generic 'webhook_url' just in case the backend uses that.
+        // Save all legacy aliases to keep backend and serverless routes aligned.
         await supabaseService.saveSettingToDb('n8n_webhook_vapi', n8nConfig.webhookVapi);
+        await supabaseService.saveSettingToDb('n8n_webhook_url', n8nConfig.webhookVapi);
         await supabaseService.saveSettingToDb('webhook_url', n8nConfig.webhookVapi); 
         
         await supabaseService.saveSettingToDb('n8n_webhook_whatsapp', n8nConfig.webhookWhatsapp);

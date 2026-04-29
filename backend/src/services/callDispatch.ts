@@ -122,8 +122,8 @@ export async function getN8nWebhookUrl(): Promise<string> {
     .in('setting_key', ['n8n_webhook_url', 'n8n_webhook_vapi', 'webhook_url']);
 
   return (
-    n8nSetting?.find((item: any) => item.setting_key === 'n8n_webhook_url')?.setting_value ||
     n8nSetting?.find((item: any) => item.setting_key === 'n8n_webhook_vapi')?.setting_value ||
+    n8nSetting?.find((item: any) => item.setting_key === 'n8n_webhook_url')?.setting_value ||
     n8nSetting?.find((item: any) => item.setting_key === 'webhook_url')?.setting_value ||
     'https://n8n-n8n-start.xzz0ed.easypanel.host/webhook/callcenteria'
   );
