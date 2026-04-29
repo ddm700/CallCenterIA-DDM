@@ -1,3 +1,4 @@
+import { waitUntil } from '@vercel/functions';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { format, toZonedTime } from 'date-fns-tz';
 
@@ -400,8 +401,8 @@ export default async function handler(req: any, res: any) {
 
   activeCampaignRuns.add(campaignId);
 
-  // Inicia processamento em background e retorna 202 imediatamente
-  void (async () => {
+  // Vincula o processamento ao lifecycle da Vercel Function.
+  waitUntil((async () => {
     try {
       const summary = await executeCampaignStart(campaignId);
       console.log(`[campaigns/start] concluído campaign=${campaignId} processados=${summary.totalProcessed} sucesso=${summary.successful} falhas=${summary.failed}`);
@@ -410,7 +411,7 @@ export default async function handler(req: any, res: any) {
     } finally {
       activeCampaignRuns.delete(campaignId);
     }
-  })();
+  })());
 
   return res.status(202).json({
     success: true,
