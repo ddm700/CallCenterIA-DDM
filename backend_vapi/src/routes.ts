@@ -7,123 +7,87 @@ import { listAssistants, listLines } from './vapi';
 import { createQueue } from './queue';
 import { config } from './config';
 
+const queue = createQueue(); // singleton — fora do plugin
+
 export default fp(async function routes(app: FastifyInstance) {
-  const queue = createQueue();
 
   app.get('/health', {
-    schema: {
-      tags: ['System'],
-      summary: 'Healthcheck'
-    }
+    schema: { tags: ['System'], summary: 'Healthcheck' }
   }, async () => ({ ok: true }));
 
-  // VAPI proxy (apenas GET list)
   app.get('/vapi/assistant', {
-    schema: {
-      tags: ['VAPI'],
-      summary: 'Listar assistentes (proxy VAPI)',
-      //response: { 200: { type: 'object' } }
-    }
-  }, async ( ) => await listAssistants());
+    schema: { tags: ['VAPI'], summary: 'Listar assistentes (proxy VAPI)' }
+  }, async () => await listAssistants());
 
-  // VERIFICAR O NOME DO ENDPOINT ABAIXO
   app.get('/vapi/lines', {
     schema: {
       tags: ['VAPI'],
       summary: 'Listar linhas/phone numbers (proxy VAPI)',
-      //response: { 200: { type: 'object' } }
       response: {
-      200: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            name: { type: 'string' }
-          },
-          additionalProperties: true
-        }
-      }
-}}}, async () => await listLines());
-
-  // Import Excel
-  app.post('/campaigns/import-excel', {
-  
-  schema: {
-    tags: ['Campaigns'],
-    summary: 'Criar campanha + importar Excel (.xlsx) e salvar contatos no DB',
-
-    consumes: ['multipart/form-data'],
-    /*
-      body: {
-      type: 'object',
-      required: ['name', 'assistant_id', 'line_id', 'file'],
-      properties: {
-        name: { type: 'string' },
-        assistant_id: { type: 'string' },
-        line_id: { type: 'string' },
-        webhook_url: { type: 'string' },
-        file: {
-          type: 'string',
-          format: 'binary'
-        }
-      }
-    }, */
-    response: {
-      200: {
-        type: 'object',
-        properties: {
-          campaign: { type: 'object' },
-          inserted_contacts: { type: 'number' },
-          parse_errors: { type: 'array', items: { type: 'string' } }
+        200: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' }
+            },
+            additionalProperties: true
+          }
         }
       }
     }
-  }
-}, async (req, reply) => {
-  const bodyRaw = (req as any).body;
+  }, async () => await listLines());
 
-  // 🔴 arquivo (vem como objeto multipart)
-  const filePart = bodyRaw?.file;
-  if (!filePart) {
-    return reply.code(400).send({ error: 'file is required' });
-  }
+  app.post('/campaigns/import-excel', {
+    schema: {
+      tags: ['Campaigns'],
+      summary: 'Criar campanha + importar Excel (.xlsx) e salvar contatos no DB',
+      consumes: ['multipart/form-data'],
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            campaign: { type: 'object' },
+            inserted_contacts: { type: 'number' },
+            parse_errors: { type: 'array', items: { type: 'string' } }
+          }
+        }
+      }
+    }
+  }, async (req, reply) => {
+    const bodyRaw = (req as any).body;
+    const filePart = bodyRaw?.file;
+    if (!filePart) return reply.code(400).send({ error: 'file is required' });
 
-  // 🔴 normaliza campos text/plain → string
-  const fields = {
-    name: bodyRaw?.name?.value,
-    assistant_id: bodyRaw?.assistant_id?.value,
-    line_id: bodyRaw?.line_id?.value,
-    webhook_url: bodyRaw?.webhook_url?.value
-  };
+    const fields = {
+      name: bodyRaw?.name?.value,
+      assistant_id: bodyRaw?.assistant_id?.value,
+      line_id: bodyRaw?.line_id?.value,
+      webhook_url: bodyRaw?.webhook_url?.value
+    };
 
-  const body = z.object({
-    name: z.string().min(1),
-    assistant_id: z.string().min(1),
-    line_id: z.string().min(1),
-    webhook_url: z.string().optional()
-  }).parse(fields);
+    const body = z.object({
+      name: z.string().min(1),
+      assistant_id: z.string().min(1),
+      line_id: z.string().min(1),
+      webhook_url: z.string().optional()
+    }).parse(fields);
 
-  const buf = await filePart.toBuffer();
-  const { contacts, errors } = await parseContactsFromXlsx(buf);
+    const buf = await filePart.toBuffer();
+    const { contacts, errors } = await parseContactsFromXlsx(buf);
 
-  const campaign = await createCampaign({
-    name: body.name,
-    assistantId: body.assistant_id,
-    lineId: body.line_id,
-    webhookUrl: body.webhook_url || null
+    const campaign = await createCampaign({
+      name: body.name,
+      assistantId: body.assistant_id,
+      lineId: body.line_id,
+      webhookUrl: body.webhook_url || null
+    });
+
+    const inserted = await insertContacts(campaign.id, contacts);
+    return { campaign, inserted_contacts: inserted, parse_errors: errors };
   });
 
-  const inserted = await insertContacts(campaign.id, contacts);
-
-  return {
-    campaign,
-    inserted_contacts: inserted,
-    parse_errors: errors
-  };
-})
-
-  // Get campaign
   app.get('/campaigns/:id', {
     schema: {
       tags: ['Campaigns'],
@@ -138,7 +102,6 @@ export default fp(async function routes(app: FastifyInstance) {
     return { campaign: c, contacts_count: n };
   });
 
-  // List campaign contacts (paginated)
   app.get('/campaigns/:id/contacts', {
     schema: {
       tags: ['Campaigns'],
@@ -159,22 +122,14 @@ export default fp(async function routes(app: FastifyInstance) {
     const offset = Math.max(parseInt(String(qs.offset ?? 0), 10), 0);
     const c = await getCampaign(id);
     if (!c) return reply.code(404).send({ error: 'campaign not found' });
-
     const rows = await listCampaignContacts(id, limit, offset);
     return { contacts: rows, limit, offset };
   });
 
-  // Get all campaigns
   app.get('/campaigns', {
-    schema: {
-      tags: ['Campaigns'],
-      summary: 'Listar todas as campanhas'
-    }
-  }, async () => {
-  return await listCampaigns();
-});
+    schema: { tags: ['Campaigns'], summary: 'Listar todas as campanhas' }
+  }, async () => await listCampaigns());
 
-  // Enqueue jobs
   app.post('/campaigns/:id/enqueue', {
     schema: {
       tags: ['Queue'],
@@ -182,9 +137,7 @@ export default fp(async function routes(app: FastifyInstance) {
       params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
       body: {
         type: 'object',
-        properties: {
-          override_webhook_url: { type: 'string' }
-        }
+        properties: { override_webhook_url: { type: 'string' } }
       }
     }
   }, async (req, reply) => {
@@ -197,18 +150,14 @@ export default fp(async function routes(app: FastifyInstance) {
     const webhookUrl = body.override_webhook_url || campaign.webhook_url || config.defaultWebhookUrl || null;
 
     const contacts = await fetchPendingContacts(id);
-    if (contacts.length === 0) {
-      return { enqueued: 0, message: 'no pending contacts' };
-    }
+    if (contacts.length === 0) return { enqueued: 0, message: 'no pending contacts' };
 
     await updateCampaignStatus(id, 'queued');
 
     let idx = 0;
     for (const ct of contacts) {
-      // delay incremental por contato
       const delay = idx * config.contactDelayMs;
 
-      // payload por contato (já inclui ids VAPI escolhidos na campanha)
       const payload = {
         campaign_id: campaign.id,
         contact_id: ct.id,
@@ -225,9 +174,10 @@ export default fp(async function routes(app: FastifyInstance) {
 
       await queue.add('contact', payload, {
         delay,
-        attempts: 1,
+        attempts: 3,                          //  era 1
+        backoff: { type: 'exponential', delay: 5000 }, //  novo
         removeOnComplete: true,
-        removeOnFail: false
+        removeOnFail: { count: 100 }          //  era false
       });
 
       await markContactEnqueued(ct.id);
@@ -235,5 +185,13 @@ export default fp(async function routes(app: FastifyInstance) {
     }
 
     return { enqueued: contacts.length, delay_ms: config.contactDelayMs };
+  });
+
+  // 👈 endpoint novo
+  app.get('/queue/stats', {
+    schema: { tags: ['Queue'], summary: 'Status da fila em tempo real' }
+  }, async () => {
+    const counts = await queue.getJobCounts();
+    return counts;
   });
 });

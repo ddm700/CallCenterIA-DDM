@@ -115,13 +115,12 @@ export async function countCampaignContacts(campaignId: string): Promise<number>
   });
 }
 
-// alteração no where para status 'pending' -> Reprocessar failed deve ser ação explícita, não automática.
 export async function fetchPendingContacts(campaignId: string) {
   return await withClient(async (c) => {
     const res = await c.query(
       `SELECT id, campaign_id, name, cpf, institution, phones, status, attempts
        FROM contacts
-       WHERE campaign_id=$1 AND status = 'pending'  
+       WHERE campaign_id=$1 AND status IN ('pending', 'enqueued', 'running')
        ORDER BY created_at ASC`,
       [campaignId]
     );
