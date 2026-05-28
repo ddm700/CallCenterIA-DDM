@@ -19,14 +19,13 @@ type JobPayload = {
   };
 };
 
-async function handle(payload: JobPayload) {
+async function handle(payload: JobPayload, attempt: number) {
   const campaign = await getCampaign(payload.campaign_id);
   if (!campaign) {
     await markFailed(payload.contact_id, 'campaign not found');
     return;
   }
 
-  // marca campanha como running ao começar (best effort)
   if (campaign.status === 'queued' || campaign.status === 'draft') {
     await updateCampaignStatus(campaign.id, 'running');
   }
@@ -37,12 +36,15 @@ async function handle(payload: JobPayload) {
     return;
   }
 
-  // tentativas: até 3 (lógica simples)
-  // aqui o job executa 1 vez; as tentativas são controladas pelo seu "reenqueue" futuro se quiser.
-  const attempt = Math.min((payload as any).attempts + 1 || 1, 3); 
+  try {
+    new URL(webhookUrl);
+  } catch {
+    await markFailed(payload.contact_id, 'invalid webhook_url');
+    return;
+  }
+
   await markAttempt(payload.contact_id, attempt);
 
-  // payload que você manda pro n8n (ou outro)
   const hookPayload = {
     campaign_id: payload.campaign_id,
     contact_id: payload.contact_id,
@@ -53,15 +55,6 @@ async function handle(payload: JobPayload) {
     emitted_at: new Date().toISOString()
   };
 
-  // valida URL
-  try {
-  new URL(webhookUrl);
-  } catch {
-  await markFailed(payload.contact_id, 'invalid webhook_url');
-  return;
-  }
-
-  // 🔴 AQUI: marca o contato como running
   await markRunning(payload.contact_id);
 
   const resp = await postWebhook(webhookUrl, hookPayload);
@@ -73,32 +66,32 @@ async function main() {
 
   const worker = new Worker(QUEUE_NAME, async (job) => {
     const payload = job.data as JobPayload;
+    const attempt = Math.min(job.attemptsMade + 1, 3);
     try {
-      await handle(payload);
+      await handle(payload, attempt);
     } catch (e: any) {
       await markFailed(payload.contact_id, e?.message ?? 'unknown error');
       throw e;
     }
   }, {
     connection,
-    concurrency: config.worker.concurrency
+    concurrency: config.worker.concurrency,
+    settings: {
+      backoffStrategy: (attempt) => attempt * 5000
+    }
   });
 
   worker.on('completed', (job) => {
-    // eslint-disable-next-line no-console
     console.log(`Job completed: ${job.id}`);
   });
   worker.on('failed', (job, err) => {
-    // eslint-disable-next-line no-console
     console.error(`Job failed: ${job?.id}`, err?.message);
   });
 
-  // eslint-disable-next-line no-console
   console.log(`Worker running. queue=${QUEUE_NAME} concurrency=${config.worker.concurrency}`);
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
   console.error(err);
   process.exit(1);
 });
