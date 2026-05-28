@@ -7,7 +7,7 @@ import { listAssistants, listLines } from './vapi';
 import { createQueue } from './queue';
 import { config } from './config';
 
-const queue = createQueue(); // singleton — fora do plugin
+const queue = createQueue(); //👈 singleton — fora do plugin
 
 export default fp(async function routes(app: FastifyInstance) {
 

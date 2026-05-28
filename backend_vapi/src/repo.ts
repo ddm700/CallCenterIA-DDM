@@ -187,6 +187,10 @@ export async function markFailed(contactId: string, err: string) {
 
 export async function updateCampaignStatus(campaignId: string, status: CampaignStatus) {
   return await withClient(async (c) => {
-    await c.query(`UPDATE campaigns SET status=$2, updated_at=NOW() WHERE id=$1`, [campaignId, status]);
+    await c.query(
+      `UPDATE campaigns SET status=$2, updated_at=NOW() 
+       WHERE id=$1 AND status != 'done'`, // 👈 não sobrescreve se já finalizou
+      [campaignId, status]
+    );
   });
 }

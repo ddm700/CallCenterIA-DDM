@@ -3,7 +3,7 @@ import { createRedis } from './redis';
 import { QUEUE_NAME } from './queue';
 import { config } from './config';
 import { postWebhook } from './webhook';
-import { getCampaign, markAttempt, markFailed, markRunning, markSuccess, updateCampaignStatus, fetchPendingContacts } from './repo';
+import { getCampaign, markFailed, markRunning, markSuccess, updateCampaignStatus, fetchPendingContacts } from './repo';
 
 type JobPayload = {
   campaign_id: string;
@@ -22,15 +22,16 @@ type JobPayload = {
 async function checkAndFinishCampaign(campaignId: string) {
   const pending = await fetchPendingContacts(campaignId);
   if (pending.length === 0) {
-    await updateCampaignStatus(campaignId, 'done'); // 👈 era 'completed'
+    await updateCampaignStatus(campaignId, 'done');
     console.log(`Campaign ${campaignId} marked as done`);
   }
 }
 
-async function handle(payload: JobPayload, attempt: number) {
+async function handle(payload: JobPayload) {
   const campaign = await getCampaign(payload.campaign_id);
   if (!campaign) {
     await markFailed(payload.contact_id, 'campaign not found');
+    await checkAndFinishCampaign(payload.campaign_id);
     return;
   }
 
@@ -49,16 +50,13 @@ async function handle(payload: JobPayload, attempt: number) {
     new URL(webhookUrl);
   } catch {
     await markFailed(payload.contact_id, 'invalid webhook_url');
-    await checkAndFinishCampaign(payload.campaign_id); 
+    await checkAndFinishCampaign(payload.campaign_id);
     return;
   }
-
-  await markAttempt(payload.contact_id, attempt);
 
   const hookPayload = {
     campaign_id: payload.campaign_id,
     contact_id: payload.contact_id,
-    status: `attempt_${attempt}`,
     assistant_id: payload.assistant_id,
     line_id: payload.line_id,
     contact: payload.contact,
@@ -77,20 +75,19 @@ async function main() {
 
   const worker = new Worker(QUEUE_NAME, async (job) => {
     const payload = job.data as JobPayload;
-    const attempt = Math.min(job.attemptsMade + 1, 3);
     try {
-      await handle(payload, attempt);
+      await handle(payload);
     } catch (e: any) {
+      const isLastAttempt = job.attemptsMade + 1 >= 3; // 👈 só finaliza na última tentativa
       await markFailed(payload.contact_id, e?.message ?? 'unknown error');
-      await checkAndFinishCampaign(payload.campaign_id);
-      throw e;
+      if (isLastAttempt) {
+        await checkAndFinishCampaign(payload.campaign_id);
+      }
+      throw e; // BullMQ controla o retry
     }
   }, {
     connection,
-    concurrency: config.worker.concurrency,
-    settings: {
-      backoffStrategy: (attempt) => attempt * 5000
-    }
+    concurrency: config.worker.concurrency
   });
 
   worker.on('completed', (job) => {
