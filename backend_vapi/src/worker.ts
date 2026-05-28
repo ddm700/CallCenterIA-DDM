@@ -3,7 +3,7 @@ import { createRedis } from './redis';
 import { QUEUE_NAME } from './queue';
 import { config } from './config';
 import { postWebhook } from './webhook';
-import { getCampaign, markAttempt, markFailed, markRunning, markSuccess, updateCampaignStatus } from './repo';
+import { getCampaign, markAttempt, markFailed, markRunning, markSuccess, updateCampaignStatus, fetchPendingContacts } from './repo';
 
 type JobPayload = {
   campaign_id: string;
@@ -19,6 +19,14 @@ type JobPayload = {
   };
 };
 
+async function checkAndFinishCampaign(campaignId: string) {
+  const pending = await fetchPendingContacts(campaignId);
+  if (pending.length === 0) {
+    await updateCampaignStatus(campaignId, 'done'); // 👈 era 'completed'
+    console.log(`Campaign ${campaignId} marked as done`);
+  }
+}
+
 async function handle(payload: JobPayload, attempt: number) {
   const campaign = await getCampaign(payload.campaign_id);
   if (!campaign) {
@@ -33,6 +41,7 @@ async function handle(payload: JobPayload, attempt: number) {
   const webhookUrl = payload.webhook_url || config.defaultWebhookUrl || null;
   if (!webhookUrl) {
     await markFailed(payload.contact_id, 'webhook_url not defined');
+    await checkAndFinishCampaign(payload.campaign_id);
     return;
   }
 
@@ -40,6 +49,7 @@ async function handle(payload: JobPayload, attempt: number) {
     new URL(webhookUrl);
   } catch {
     await markFailed(payload.contact_id, 'invalid webhook_url');
+    await checkAndFinishCampaign(payload.campaign_id); 
     return;
   }
 
@@ -59,6 +69,7 @@ async function handle(payload: JobPayload, attempt: number) {
 
   const resp = await postWebhook(webhookUrl, hookPayload);
   await markSuccess(payload.contact_id, resp);
+  await checkAndFinishCampaign(payload.campaign_id);
 }
 
 async function main() {
@@ -71,6 +82,7 @@ async function main() {
       await handle(payload, attempt);
     } catch (e: any) {
       await markFailed(payload.contact_id, e?.message ?? 'unknown error');
+      await checkAndFinishCampaign(payload.campaign_id);
       throw e;
     }
   }, {
