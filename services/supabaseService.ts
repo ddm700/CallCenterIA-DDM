@@ -81,6 +81,17 @@ export const supabaseService = {
   },
 
   async createCampaign(campaignData: Partial<Campaign>): Promise<Campaign | null> {
+    try {
+      const response = await apiRequest<{ success: boolean; campaign?: Campaign }>('/api/campaigns/save', {
+        method: 'POST',
+        body: JSON.stringify({ campaign: campaignData })
+      });
+
+      return response.campaign || null;
+    } catch (apiError) {
+      console.warn('[campaigns/save] endpoint unavailable; falling back to Supabase client.', apiError);
+    }
+
     const dbPayload = {
       nome: campaignData.name,
       instituicao: campaignData.institution,
@@ -111,6 +122,16 @@ export const supabaseService = {
   },
 
   async updateCampaign(id: string, campaignData: Partial<Campaign>): Promise<void> {
+    try {
+      await apiRequest<{ success: boolean }>('/api/campaigns/save', {
+        method: 'POST',
+        body: JSON.stringify({ id, campaign: campaignData })
+      });
+      return;
+    } catch (apiError) {
+      console.warn('[campaigns/save] endpoint unavailable; falling back to Supabase client.', apiError);
+    }
+
     const dbPayload = {
       nome: campaignData.name,
       instituicao: campaignData.institution,
@@ -136,6 +157,16 @@ export const supabaseService = {
   },
 
   async toggleCampaignStatus(id: string, isActive: boolean): Promise<void> {
+    try {
+      await apiRequest<{ success: boolean }>('/api/campaigns/status', {
+        method: 'POST',
+        body: JSON.stringify({ id, isActive })
+      });
+      return;
+    } catch (apiError) {
+      console.warn('[campaigns/status] endpoint unavailable; falling back to Supabase client.', apiError);
+    }
+
     const { error } = await supabase
       .from('campaigns')
       .update({

@@ -191,8 +191,9 @@ export const Campaigns: React.FC = () => {
       setIsModalOpen(false);
       fetchCampaigns(); // Refresh list
 
-    } catch (error) {
-      alert('Erro ao salvar campanha');
+    } catch (error: any) {
+      console.error('Erro ao salvar campanha:', error);
+      alert(error?.message || 'Erro ao salvar campanha');
     } finally {
       setSaving(false);
     }
