@@ -7,6 +7,18 @@ export const supabaseService = {
   // --- CAMPAIGNS ---
 
   async getCampaigns(): Promise<Campaign[]> {
+    try {
+      const response = await apiRequest<{ success: boolean; campaigns?: Campaign[] }>('/api/campaigns/list', {
+        method: 'GET'
+      });
+
+      if (Array.isArray(response.campaigns)) {
+        return response.campaigns;
+      }
+    } catch (apiError) {
+      console.warn('[campaigns/list] endpoint unavailable; falling back to Supabase client.', apiError);
+    }
+
     const { data, error } = await supabase
       .from('campaigns')
       .select('*')
