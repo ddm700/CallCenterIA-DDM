@@ -1,6 +1,6 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { HashRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Phone, BarChart, Award, Settings as SettingsIcon, Search, Moon, Sun, LogOut, ZoomIn, ZoomOut, Terminal } from 'lucide-react';
+import { LayoutDashboard, Users, Phone, BarChart, Award, Settings as SettingsIcon, Search, Moon, Sun, LogOut, ZoomIn, ZoomOut, Terminal, Handshake } from 'lucide-react';
 
 // Pages
 import { Campaigns } from './pages/Campaigns';
@@ -10,6 +10,7 @@ import { Reports } from './pages/Reports';
 import { Quality } from './pages/Quality';
 import { Settings } from './pages/Settings';
 import { Logs } from './pages/Logs';
+import { KpiAcordos } from './pages/KpiAcordos';
 
 // --- Theme Context ---
 interface ThemeContextType {
@@ -106,6 +107,7 @@ const TopBar = () => {
         <NavItem to="/contacts" icon={Users} label="Contatos" />
         <NavItem to="/calls" icon={Phone} label="Ligações" />
         <NavItem to="/reports" icon={BarChart} label="Relatórios" />
+        <NavItem to="/kpi-acordos" icon={Handshake} label="KPI Acordos" />
         <NavItem to="/quality" icon={Award} label="Qualidade" />
         <NavItem to="/logs" icon={Terminal} label="System Logs" />
         <NavItem to="/settings" icon={SettingsIcon} label="Configurações" />
@@ -155,6 +157,7 @@ const App: React.FC = () => {
               <Route path="/contacts" element={<Contacts />} />
               <Route path="/calls" element={<Calls />} />
               <Route path="/reports" element={<Reports />} />
+              <Route path="/kpi-acordos" element={<KpiAcordos />} />
               <Route path="/quality" element={<Quality />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/logs" element={<Logs />} />

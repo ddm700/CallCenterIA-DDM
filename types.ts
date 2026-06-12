@@ -83,6 +83,34 @@ export interface Call {
   raw_success_evaluation?: string; // extracted from metadata_raw.analysis.successEvaluation
 }
 
+export interface AcordoKpi {
+  id: string;
+  campaign_id: string;
+  campanha_nome: string;
+  campanha_instituicao?: string;
+  referencia_data: string;
+  chamadas_discadas: number;
+  chamadas_atendidas: number;
+  contatos_efetivos: number;
+  acordos_fechados: number;
+  chamadas_com_falha: number;
+  chamadas_totais: number;
+  quantidade_ligacoes: number;
+  tempo_total_ligacoes_segundos: number;
+  custo_operacional: number;
+  valor_recuperado: number;
+  taxa_conversao: number;
+  taxa_atendimento: number;
+  tma_segundos: number;
+  cpr: number;
+  call_failure_rate: number;
+  taxa_engajamento: number;
+  created_at?: string;
+  updated_at?: string;
+  acordos_formalizados_count?: number;
+  valor_formalizado?: number;
+}
+
 export interface Metric {
   label: string;
   value: string | number;

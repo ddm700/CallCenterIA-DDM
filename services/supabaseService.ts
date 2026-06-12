@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabaseClient';
 import { apiRequest } from '../lib/apiClient';
-import { Campaign, Contact, Call } from '../types';
+import { Campaign, Contact, Call, AcordoKpi } from '../types';
 
 export const supabaseService = {
 
@@ -586,6 +586,76 @@ export const supabaseService = {
   },
 
   // --- QUALITY (Views) ---
+
+  // --- KPI ACORDOS ---
+
+  async getAcordosKPIs(): Promise<AcordoKpi[]> {
+    const { data: kpis, error: kpisError } = await supabase
+      .from('vw_acordos_kpis')
+      .select('*')
+      .order('referencia_data', { ascending: false })
+      .limit(2000);
+
+    if (kpisError) {
+      console.error('Error fetching acordo KPIs:', kpisError);
+      throw kpisError;
+    }
+
+    const { data: formalizados, error: formalizadosError } = await supabase
+      .from('acordos_formalizados')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(5000);
+
+    if (formalizadosError) {
+      console.error('Error fetching acordos formalizados:', formalizadosError);
+      throw formalizadosError;
+    }
+
+    const formalizadosByCampaignDate = new Map<string, { count: number; value: number }>();
+
+    (formalizados || []).forEach((row: any) => {
+      const campaignId = String(row.campaign_id || '');
+      const referenceDate = row.created_at ? String(row.created_at).slice(0, 10) : '';
+      if (!campaignId || !referenceDate) return;
+
+      const key = `${campaignId}|${referenceDate}`;
+      const current = formalizadosByCampaignDate.get(key) || { count: 0, value: 0 };
+      const value = Number(row.valor_recuperado || 0);
+
+      formalizadosByCampaignDate.set(key, {
+        count: current.count + 1,
+        value: current.value + (Number.isFinite(value) ? value : 0)
+      });
+    });
+
+    return (kpis || []).map((row: any) => {
+      const key = `${row.campaign_id}|${row.referencia_data}`;
+      const formalizado = formalizadosByCampaignDate.get(key) || { count: 0, value: 0 };
+
+      return {
+        ...row,
+        chamadas_discadas: Number(row.chamadas_discadas || 0),
+        chamadas_atendidas: Number(row.chamadas_atendidas || 0),
+        contatos_efetivos: Number(row.contatos_efetivos || 0),
+        acordos_fechados: Number(row.acordos_fechados || 0),
+        chamadas_com_falha: Number(row.chamadas_com_falha || 0),
+        chamadas_totais: Number(row.chamadas_totais || 0),
+        quantidade_ligacoes: Number(row.quantidade_ligacoes || 0),
+        tempo_total_ligacoes_segundos: Number(row.tempo_total_ligacoes_segundos || 0),
+        custo_operacional: Number(row.custo_operacional || 0),
+        valor_recuperado: Number(row.valor_recuperado || 0),
+        taxa_conversao: Number(row.taxa_conversao || 0),
+        taxa_atendimento: Number(row.taxa_atendimento || 0),
+        tma_segundos: Number(row.tma_segundos || 0),
+        cpr: Number(row.cpr || 0),
+        call_failure_rate: Number(row.call_failure_rate || 0),
+        taxa_engajamento: Number(row.taxa_engajamento || 0),
+        acordos_formalizados_count: formalizado.count,
+        valor_formalizado: formalizado.value
+      };
+    });
+  },
 
   async getQualityMetrics(): Promise<any> {
     const { data, error } = await supabase
