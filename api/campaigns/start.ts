@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { format, toZonedTime } from 'date-fns-tz';
+import { waitUntil } from '@vercel/functions';
 
 // ---------------------------------------------------------------------------
 // Config from env vars (mirrors callcenteria-merge/backend/src/config/env.ts)
@@ -533,8 +534,7 @@ export default async function handler(req: any, res: any) {
     vercelRegion: process.env.VERCEL_REGION || null,
   });
 
-  // Inicia processamento em background e retorna 202 imediatamente
-  void (async () => {
+  const backgroundRun = (async () => {
     try {
       const summary = await executeCampaignStart(campaignId);
       console.log(`[campaigns/start] concluído campaign=${campaignId} processados=${summary.totalProcessed} sucesso=${summary.successful} falhas=${summary.failed}`);
@@ -548,6 +548,9 @@ export default async function handler(req: any, res: any) {
       activeCampaignRuns.delete(campaignId);
     }
   })();
+
+  // No Vercel, trabalho assíncrono solto pode ser encerrado após a resposta.
+  waitUntil(backgroundRun);
 
   return res.status(202).json({
     success: true,
