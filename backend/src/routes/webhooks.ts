@@ -9,10 +9,45 @@ const technicalFailures = [
   'no-answer',
   'busy'
 ];
-const successfulEndings = ['customer-ended-call', 'assistant-ended-call', 'Sem Débito', 'Sem DÃ©bito'];
+const successfulEndings = ['customer-ended-call', 'assistant-ended-call', 'Sem Debito', 'Sem Debito'];
+const completedEndings = ['assistant-ended-call', 'customer-ended-call'];
 const MIN_DURATION_FOR_SUCCESS = 15;
 
 export const webhooksRouter = Router();
+
+function isObject(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function buildMetadataFromPayload(payload: any, call: any, metadata: any): Record<string, any> {
+  const payloadMetadata = isObject(metadata) ? metadata : {};
+  const callMetadata = isObject(call?.metadata) ? call.metadata : {};
+  const payloadVariableValues = isObject(payload?.assistantOverrides?.variableValues)
+    ? payload.assistantOverrides.variableValues
+    : {};
+  const callVariableValues = isObject(call?.assistantOverrides?.variableValues)
+    ? call.assistantOverrides.variableValues
+    : {};
+  const artifactVariables = isObject(call?.artifact?.variables) ? call.artifact.variables : {};
+
+  return {
+    ...payloadMetadata,
+    ...payloadVariableValues,
+    ...callVariableValues,
+    ...artifactVariables,
+    ...callMetadata
+  };
+}
+
+function firstNonEmpty(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const str = String(value).trim();
+    if (str) return str;
+  }
+
+  return null;
+}
 
 webhooksRouter.post('/vapi/callback', async (req, res) => {
   try {
@@ -24,21 +59,43 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
     }
 
     const { call, metadata } = payload;
-    const metadataFromCall = call?.metadata ?? metadata ?? {};
+    if (!call || typeof call !== 'object') {
+      return res.status(400).json({ success: false, error: 'Payload sem objeto call' });
+    }
+
+    const metadataFromCall = buildMetadataFromPayload(payload, call, metadata);
+    const callId = firstNonEmpty(call.id, call.callId, payload.callId, payload.id);
+    if (!callId) {
+      return res.status(400).json({ success: false, error: 'Payload sem id da chamada VAPI' });
+    }
+
+    const campaignContactIdFromMetadata = firstNonEmpty(
+      metadataFromCall.campaignContactId,
+      metadataFromCall.campaign_contact_id,
+      metadataFromCall.campaignContactID,
+      metadataFromCall.rowNumber
+    );
+    const phoneIdFromMetadata = firstNonEmpty(metadataFromCall.phoneId, metadataFromCall.contactPhoneId, metadataFromCall.phone_id);
+    const startedAtValue = firstNonEmpty(call.startedAt, call.started_at, payload.startedAt, payload.started_at);
+    const endedAtValue = firstNonEmpty(call.endedAt, call.ended_at, payload.endedAt, payload.ended_at);
+    const endedReason = firstNonEmpty(call.endedReason, call.ended_reason, payload.endedReason, payload.ended_reason);
+    const statusValue = [...successfulEndings, ...completedEndings].includes(endedReason || '')
+      ? 'completed'
+      : endedReason || firstNonEmpty(call.status, payload.status) || 'completed';
 
     let existingCall: { id: string; campaign_contact_id: string | null } | null = null;
     const { data: foundCall, error: findError } = await supabaseAdmin
       .from('calls')
       .select('id, campaign_contact_id')
-      .eq('vapi_call_id', call.id)
+      .eq('vapi_call_id', callId)
       .maybeSingle();
     if (findError) throw new Error(`Erro ao buscar chamada: ${findError.message}`);
 
-    if (!foundCall && metadata?.campaignContactId) {
+    if (!foundCall && campaignContactIdFromMetadata) {
       const { data: orphanCall } = await supabaseAdmin
         .from('calls')
         .select('id, campaign_contact_id')
-        .eq('campaign_contact_id', metadata.campaignContactId)
+        .eq('campaign_contact_id', campaignContactIdFromMetadata)
         .is('vapi_call_id', null)
         .eq('status', 'queued')
         .order('created_at', { ascending: false })
@@ -47,13 +104,13 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
 
       if (orphanCall) {
         existingCall = orphanCall;
-        await supabaseAdmin.from('calls').update({ vapi_call_id: call.id }).eq('id', orphanCall.id);
+        await supabaseAdmin.from('calls').update({ vapi_call_id: callId }).eq('id', orphanCall.id);
 
         const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
         await supabaseAdmin
           .from('calls')
           .delete()
-          .eq('campaign_contact_id', metadata.campaignContactId)
+          .eq('campaign_contact_id', campaignContactIdFromMetadata)
           .is('vapi_call_id', null)
           .neq('id', orphanCall.id)
           .lt('created_at', tenMinutesAgo);
@@ -64,9 +121,9 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
       const { data: newCall, error: insertError } = await supabaseAdmin
         .from('calls')
         .insert({
-          vapi_call_id: call.id,
-          campaign_contact_id: metadataFromCall?.campaignContactId || null,
-          contact_phone_id: metadataFromCall?.phoneId || null,
+          vapi_call_id: callId,
+          campaign_contact_id: campaignContactIdFromMetadata || null,
+          contact_phone_id: phoneIdFromMetadata || null,
           status: 'queued'
         })
         .select('id, campaign_contact_id')
@@ -76,7 +133,7 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
         const { data: retryCall } = await supabaseAdmin
           .from('calls')
           .select('id, campaign_contact_id')
-          .eq('vapi_call_id', call.id)
+          .eq('vapi_call_id', callId)
           .maybeSingle();
         if (!retryCall) throw new Error(`Erro ao criar chamada: ${insertError.message}`);
         existingCall = retryCall;
@@ -89,15 +146,24 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
 
     if (!existingCall) throw new Error('Falha ao obter registro de chamada');
 
-    const startedAt = new Date(call.startedAt);
-    const endedAt = new Date(call.endedAt);
-    const durationSeconds = Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000);
+    const startedAt = startedAtValue ? new Date(startedAtValue) : null;
+    const endedAt = endedAtValue ? new Date(endedAtValue) : null;
+    const hasValidDates =
+      startedAt instanceof Date &&
+      endedAt instanceof Date &&
+      Number.isFinite(startedAt.getTime()) &&
+      Number.isFinite(endedAt.getTime());
+    const durationSeconds = hasValidDates
+      ? Math.max(0, Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000))
+      : Number(call.durationSeconds ?? call.duration_seconds ?? call.duration ?? 0) || 0;
 
     const costs = call.costs || [];
     const custo_stt = costs.find((c: any) => c.type === 'stt' || c.type === 'transcription')?.amount || 0;
     const custo_tts = costs.find((c: any) => c.type === 'tts' || c.type === 'voice')?.amount || 0;
     const custo_vapi = costs.find((c: any) => c.type === 'vapi' || c.type === 'service')?.amount || 0;
-    const custo_total = costs.reduce((sum: number, cost: any) => sum + (cost.amount || 0), 0);
+    const custo_total = costs.length > 0
+      ? costs.reduce((sum: number, cost: any) => sum + (cost.amount || 0), 0)
+      : Number(call.cost ?? call.custo_total ?? 0) || 0;
 
     const structuredData = call.analysis?.structuredData || {};
     let successEvaluation: string | null = null;
@@ -110,23 +176,23 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
           : String(call.analysis.successEvaluation);
     }
 
-    const completedEndings = ['assistant-ended-call', 'customer-ended-call'];
     const updateData = {
-      campaign_contact_id: metadataFromCall.campaignContactId ?? existingCall.campaign_contact_id ?? null,
-      contact_phone_id: metadataFromCall.phoneId ?? null,
-      started_at: call.startedAt,
-      ended_at: call.endedAt,
-      ended_reason: call.endedReason,
+      vapi_call_id: callId,
+      campaign_contact_id: campaignContactIdFromMetadata ?? existingCall.campaign_contact_id ?? null,
+      contact_phone_id: phoneIdFromMetadata,
+      started_at: startedAtValue,
+      ended_at: endedAtValue,
+      ended_reason: endedReason,
       duration_seconds: durationSeconds,
       custo_total,
       custo_stt,
       custo_tts,
       custo_vapi,
-      summary: call.analysis?.summary || null,
+      summary: firstNonEmpty(call.analysis?.summary, call.summary, payload.summary),
       success_evaluation: successEvaluation,
-      transcript: call.artifact?.transcript || null,
-      recording_url: call.artifact?.recording?.url || null,
-      stereo_recording_url: call.artifact?.recording?.stereoRecordingUrl || null,
+      transcript: firstNonEmpty(call.artifact?.transcript, call.transcript, payload.transcript),
+      recording_url: firstNonEmpty(call.artifact?.recording?.url, call.recordingUrl, call.recording_url),
+      stereo_recording_url: firstNonEmpty(call.artifact?.recording?.stereoRecordingUrl, call.stereoRecordingUrl, call.stereo_recording_url),
       artifact_log_url: call.artifact?.artifactLogUrl || null,
       assistant_id: call.assistantId || null,
       phone_number_id: call.phoneNumberId || null,
@@ -138,13 +204,13 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
       structured_next_steps: structuredData.nextSteps || null,
       structured_emotions_objections: structuredData.emotionsObjections || null,
       metadata_raw: payload,
-      status: [...completedEndings, 'Sem Débito', 'Sem DÃ©bito'].includes(call.endedReason) ? 'completed' : call.endedReason
+      status: statusValue
     };
 
     const { error: updateError } = await supabaseAdmin.from('calls').update(updateData).eq('id', existingCall.id);
     if (updateError) throw new Error(`Erro ao atualizar chamada: ${updateError.message}`);
 
-    const campaignContactId = existingCall.campaign_contact_id || metadata?.campaignContactId;
+    const campaignContactId = existingCall.campaign_contact_id || campaignContactIdFromMetadata;
     if (campaignContactId) {
       const { data: campaignContact, error: ccError } = await supabaseAdmin
         .from('campaign_contacts')
@@ -158,11 +224,11 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
 
         if (successEvaluation === 'true') {
           newStatus = 'concluido';
-        } else if (successfulEndings.includes(call.endedReason) && durationSeconds >= MIN_DURATION_FOR_SUCCESS) {
+        } else if (successfulEndings.includes(endedReason || '') && durationSeconds >= MIN_DURATION_FOR_SUCCESS) {
           newStatus = 'concluido';
         } else if ((campaignContact.tentativas_realizadas || 0) >= maxTentativas) {
           newStatus = 'falhou';
-        } else if (technicalFailures.includes(call.endedReason)) {
+        } else if (technicalFailures.includes(endedReason || '')) {
           newStatus = 'pendente';
         }
 

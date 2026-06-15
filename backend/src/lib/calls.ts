@@ -45,6 +45,14 @@ function isLoopbackUrl(value: string): boolean {
   }
 }
 
+function getVercelPublicUrl(): string | null {
+  const rawUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (!rawUrl) return null;
+
+  const withProtocol = rawUrl.startsWith('http://') || rawUrl.startsWith('https://') ? rawUrl : `https://${rawUrl}`;
+  return normalizeBaseUrl(withProtocol);
+}
+
 export async function getBackendPublicUrl(): Promise<string> {
   const { data, error } = await supabaseAdmin
     .from('app_settings')
@@ -60,7 +68,12 @@ export async function getBackendPublicUrl(): Promise<string> {
     }
   }
 
-  const fallbackUrl = normalizeBaseUrl(env.backendPublicUrl) || `http://localhost:${env.port}`;
+  const configuredFallbackUrl = normalizeBaseUrl(env.backendPublicUrl);
+  const fallbackUrl =
+    configuredFallbackUrl && !isLoopbackUrl(configuredFallbackUrl)
+      ? configuredFallbackUrl
+      : getVercelPublicUrl() || configuredFallbackUrl || `http://localhost:${env.port}`;
+
   if (isLoopbackUrl(fallbackUrl)) {
     console.warn(
       `[calls] BACKEND_PUBLIC_URL em modo loopback (${fallbackUrl}). ` +
