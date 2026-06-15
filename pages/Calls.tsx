@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, Badge, Input } from '../components/ui';
 import { Search, Play, ExternalLink, XCircle, RefreshCw, Loader2, Phone, Activity, UserCheck, Voicemail } from 'lucide-react';
 import { Call } from '../types';
 import { supabaseService } from '../services/supabaseService';
 import { CallDetailsModal } from '../components/CallDetailsModal';
+import { supabase } from '../lib/supabaseClient';
 
 export const Calls: React.FC = () => {
   const [calls, setCalls] = useState<Call[]>([]);
@@ -27,9 +28,10 @@ export const Calls: React.FC = () => {
 
   // Filter Data
   const [allCampaignNames, setAllCampaignNames] = useState<string[]>([]);
+  const refreshTimerRef = useRef<number | null>(null);
 
-  const fetchCalls = async () => {
-    setLoading(true);
+  const fetchCalls = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
       const [callsData, campaignsData] = await Promise.all([
         supabaseService.getCalls(),
@@ -40,13 +42,50 @@ export const Calls: React.FC = () => {
     } catch (error) {
       console.error(error);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchCalls();
-  }, []);
+  }, [fetchCalls]);
+
+  useEffect(() => {
+    const client = supabase as any;
+    if (!client.channel || !client.removeChannel) return;
+
+    const scheduleCallsRefresh = () => {
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+
+      refreshTimerRef.current = window.setTimeout(() => {
+        refreshTimerRef.current = null;
+        fetchCalls(false);
+      }, 500);
+    };
+
+    const channel = client
+      .channel('calls-history-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'calls' },
+        scheduleCallsRefresh
+      )
+      .subscribe((status: string) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[calls/history] realtime subscription status:', status);
+        }
+      });
+
+    return () => {
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      client.removeChannel(channel);
+    };
+  }, [fetchCalls]);
 
   // --- Filtering Logic ---
 
