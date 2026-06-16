@@ -201,9 +201,14 @@ export default async function handler(req: any, res: any) {
       structured_main_points: structuredData.mainPoints || null,
       structured_next_steps: structuredData.nextSteps || null,
       structured_emotions_objections: structuredData.emotionsObjections || null,
-      metadata_raw: payload,
       status: statusValue
     };
+
+    const { error: metadataUpdateError } = await supabaseAdmin
+      .from('calls')
+      .update({ metadata_raw: payload })
+      .eq('id', existingCall.id);
+    if (metadataUpdateError) throw new Error(`Erro ao atualizar metadata da chamada: ${metadataUpdateError.message}`);
 
     const { error: updateError } = await supabaseAdmin.from('calls').update(updateData).eq('id', existingCall.id);
     if (updateError) throw new Error(`Erro ao atualizar chamada: ${updateError.message}`);
