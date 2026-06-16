@@ -90,6 +90,11 @@ async function createVapiCall(apiKey: string, payload: Record<string, unknown>) 
   return { status: response.status, body };
 }
 
+function getVapiCustomerName(name: string) {
+  const cleaned = name.trim();
+  return cleaned.length > 40 ? cleaned.slice(0, 40) : cleaned;
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -206,41 +211,61 @@ export default async function handler(req: any, res: any) {
 
     if (assistantId && phoneNumberId && vapiApiKey) {
       dispatchMode = 'direct_vapi';
-      vapiResult = await createVapiCall(vapiApiKey, {
-        assistantId,
-        phoneNumberId,
-        customer: {
-          number: customerNumber,
-          name: customerName
-        },
-        metadata: {
-          contactId: contactId || null,
-          campaignContactId,
-          campaignId: campaignId || 'manual',
-          phoneId: phoneNumberId,
-          cpf,
-          customerCpf: cpf,
-          customerName,
-          customerNumber
-        },
-        assistantOverrides: {
-          serverUrl: callbackUrl,
-          serverMessages: ['end-of-call-report'],
-          variableValues: {
-            Valorcpf: cpf,
-            cpf,
-            contactId: contactId || '',
-            campaignContactId: campaignContactId || '',
+      try {
+        vapiResult = await createVapiCall(vapiApiKey, {
+          assistantId,
+          phoneNumberId,
+          customer: {
+            number: customerNumber,
+            name: getVapiCustomerName(customerName)
+          },
+          metadata: {
+            contactId: contactId || null,
+            campaignContactId,
             campaignId: campaignId || 'manual',
+            phoneId: phoneNumberId,
+            cpf,
+            customerCpf: cpf,
             customerName,
             customerNumber
+          },
+          assistantOverrides: {
+            serverUrl: callbackUrl,
+            serverMessages: ['end-of-call-report'],
+            variableValues: {
+              Valorcpf: cpf,
+              cpf,
+              contactId: contactId || '',
+              campaignContactId: campaignContactId || '',
+              campaignId: campaignId || 'manual',
+              customerName,
+              customerNumber
+            }
           }
-        }
-      });
+        });
 
-      const vapiCallId = vapiResult.body && typeof vapiResult.body === 'object' ? (vapiResult.body as any).id : null;
-      if (vapiCallId && callRecord?.id) {
-        await supabase.from('calls').update({ vapi_call_id: vapiCallId }).eq('id', callRecord.id);
+        const vapiCallId = vapiResult.body && typeof vapiResult.body === 'object' ? (vapiResult.body as any).id : null;
+        if (vapiCallId && callRecord?.id) {
+          await supabase.from('calls').update({ vapi_call_id: vapiCallId }).eq('id', callRecord.id);
+        }
+      } catch (vapiError: any) {
+        if (callRecord?.id) {
+          await supabase
+            .from('calls')
+            .update({
+              status: 'failed',
+              ended_reason: 'vapi-create-call-failed',
+              summary: vapiError?.message || 'Falha ao criar chamada na VAPI'
+            })
+            .eq('id', callRecord.id);
+        }
+        if (campaignContactId) {
+          await supabase
+            .from('campaign_contacts')
+            .update({ status: 'falhou', ultima_tentativa: new Date().toISOString() })
+            .eq('id', campaignContactId);
+        }
+        throw vapiError;
       }
     } else {
       const response = await fetch(n8nWebhookUrl, {
