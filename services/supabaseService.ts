@@ -434,6 +434,9 @@ export const supabaseService = {
   // --- CALLS ---
 
   async getCalls(): Promise<Call[]> {
+    const apiCallsData = await apiRequest<Call[]>('/api/calls?status=completed,failed');
+    return apiCallsData || [];
+
     const { data, error } = await supabase
       .from('calls')
       .select(`

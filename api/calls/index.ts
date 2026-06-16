@@ -66,7 +66,6 @@ function normalizeCall(call: any) {
     structured_purpose: call.structured_purpose,
     structured_main_points: call.structured_main_points,
     analysis,
-    metadata_raw: meta,
     raw_summary: analysis?.summary || meta?.summary || call.summary || '',
     raw_success_evaluation: String(rawSuccessEval)
   };
@@ -88,7 +87,9 @@ export default async function handler(req: any, res: any) {
 
     let query = supabaseAdmin
       .from('calls')
-      .select('*')
+      .select(
+        'id,campaign_contact_id,contact_phone_id,vapi_call_id,started_at,ended_at,status,ended_reason,duration_seconds,transcript,summary,success_evaluation,custo_total,custo_stt,custo_tts,custo_vapi,created_at,assistant_id,phone_number_id,recording_url,stereo_recording_url,artifact_log_url,structured_name,structured_rating_label,structured_rating_text,structured_purpose,structured_main_points,structured_next_steps,structured_emotions_objections,customer_number,campanha,cpf,cliente'
+      )
       .order('started_at', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(1000);
