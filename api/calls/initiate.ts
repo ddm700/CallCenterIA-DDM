@@ -21,6 +21,41 @@ async function getN8nWebhookUrl(supabase: ReturnType<typeof getSupabaseAdmin>) {
   );
 }
 
+async function getBackendPublicUrl(supabase: ReturnType<typeof getSupabaseAdmin>) {
+  const keys = ['backend_public_url', 'backend_url', 'public_base_url', 'public_url'];
+  const { data } = await supabase
+    .from('app_settings')
+    .select('setting_key, setting_value')
+    .in('setting_key', keys);
+
+  for (const key of keys) {
+    const raw = data?.find((item: any) => item.setting_key === key)?.setting_value;
+    const value = typeof raw === 'string' ? raw.trim().replace(/\/+$/, '') : '';
+    if (!value) continue;
+    try {
+      new URL(value);
+      return value;
+    } catch {}
+  }
+
+  const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || '';
+  if (vercelUrl) {
+    return (vercelUrl.startsWith('http') ? vercelUrl : `https://${vercelUrl}`).replace(/\/+$/, '');
+  }
+
+  return (process.env.BACKEND_PUBLIC_URL || '').replace(/\/+$/, '');
+}
+
+async function parseResponseBody(response: Response) {
+  const raw = await response.text();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -31,21 +66,30 @@ export default async function handler(req: any, res: any) {
 
   try {
     const supabase = getSupabaseAdmin();
-    const { contactId, campaignId, customerNumber, customerName } = req.body as {
+    const {
+      contactId,
+      campaignId,
+      campaignContactId: incomingCampaignContactId,
+      customerNumber,
+      customerName,
+      customerCpf
+    } = req.body as {
       contactId?: string;
       campaignId?: string;
+      campaignContactId?: string;
       customerNumber?: string;
       customerName?: string;
+      customerCpf?: string;
     };
 
     if (!customerNumber || !customerName) {
       return res.status(400).json({ success: false, error: 'Telefone e nome sao obrigatorios' });
     }
 
-    let cpf = '';
+    let cpf = customerCpf || '';
     if (contactId) {
       const { data } = await supabase.from('contacts').select('cpf').eq('id', contactId).maybeSingle();
-      cpf = data?.cpf || '';
+      cpf = data?.cpf || cpf;
     }
 
     const n8nWebhookUrl = await getN8nWebhookUrl(supabase);
@@ -66,7 +110,7 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    let campaignContactId: string | null = null;
+    let campaignContactId: string | null = incomingCampaignContactId || null;
     if (campaignId && contactId) {
       const { data: cc } = await supabase
         .from('campaign_contacts')
@@ -78,7 +122,7 @@ export default async function handler(req: any, res: any) {
         .limit(1)
         .maybeSingle();
 
-      campaignContactId = cc?.id || null;
+      campaignContactId = cc?.id || campaignContactId;
       if (cc?.id) {
         await supabase
           .from('campaign_contacts')
@@ -87,9 +131,7 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const backendPublicUrl =
-      process.env.BACKEND_PUBLIC_URL ||
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
+    const backendPublicUrl = await getBackendPublicUrl(supabase);
     const callbackUrl = `${backendPublicUrl}/api/webhooks/vapi/callback`;
 
     const { data: callRecord } = await supabase
@@ -111,10 +153,12 @@ export default async function handler(req: any, res: any) {
     const n8nPayload = {
       contactId: contactId || null,
       campaignContactId,
+      phoneId: null,
       campaignId: campaignId || 'manual',
       customerNumber,
       customerName,
       cpf,
+      customerCpf: cpf,
       assistantId,
       phoneNumberId,
       callbackUrl,
@@ -133,9 +177,32 @@ export default async function handler(req: any, res: any) {
       body: JSON.stringify(n8nPayload)
     });
 
-    if (!response.ok) throw new Error(`Erro n8n: ${response.status} ${response.statusText}`);
+    const n8nResponseBody = await parseResponseBody(response);
+    const n8nExplicitFailure =
+      n8nResponseBody &&
+      typeof n8nResponseBody === 'object' &&
+      ((n8nResponseBody as any).success === false ||
+        (n8nResponseBody as any).ok === false ||
+        (n8nResponseBody as any).executed === false ||
+        Boolean((n8nResponseBody as any).error));
 
-    return res.json({ success: true, message: 'Ligacao iniciada', callId: callRecord?.id ?? null });
+    if (!response.ok || n8nExplicitFailure) {
+      throw new Error(
+        typeof n8nResponseBody === 'string'
+          ? n8nResponseBody
+          : JSON.stringify(n8nResponseBody || { status: response.status, statusText: response.statusText })
+      );
+    }
+
+    return res.json({
+      success: true,
+      message: 'Ligacao iniciada',
+      callId: callRecord?.id ?? null,
+      n8n: {
+        status: response.status,
+        body: n8nResponseBody
+      }
+    });
   } catch (error: any) {
     console.error('[calls/initiate] error', error);
     return res.status(500).json({ success: false, error: error.message || 'Erro interno' });
