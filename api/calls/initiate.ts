@@ -21,6 +21,18 @@ async function getN8nWebhookUrl(supabase: ReturnType<typeof getSupabaseAdmin>) {
   );
 }
 
+async function getVapiApiKey(supabase: ReturnType<typeof getSupabaseAdmin>) {
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('setting_value')
+    .eq('setting_key', 'vapi_api_key')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data?.setting_value || process.env.VAPI_API_KEY || null;
+}
+
 async function getBackendPublicUrl(supabase: ReturnType<typeof getSupabaseAdmin>) {
   const keys = ['backend_public_url', 'backend_url', 'public_base_url', 'public_url'];
   const { data } = await supabase
@@ -54,6 +66,28 @@ async function parseResponseBody(response: Response) {
   } catch {
     return raw;
   }
+}
+
+async function createVapiCall(apiKey: string, payload: Record<string, unknown>) {
+  const response = await fetch('https://api.vapi.ai/call', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const body = await parseResponseBody(response);
+  if (!response.ok) {
+    throw new Error(
+      typeof body === 'string'
+        ? body
+        : JSON.stringify(body || { status: response.status, statusText: response.statusText })
+    );
+  }
+
+  return { status: response.status, body };
 }
 
 export default async function handler(req: any, res: any) {
@@ -93,6 +127,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const n8nWebhookUrl = await getN8nWebhookUrl(supabase);
+    const vapiApiKey = await getVapiApiKey(supabase);
 
     let assistantId: string | null = null;
     let phoneNumberId: string | null = null;
@@ -165,43 +200,91 @@ export default async function handler(req: any, res: any) {
       tipoTelefonia: 'vapi'
     };
 
-    const response = await fetch(n8nWebhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-source': 'node-backend',
-        'x-function-name': 'initiate-vapi-call',
-        'x-system': 'discador-vapi',
-        'x-version': '1.0'
-      },
-      body: JSON.stringify(n8nPayload)
-    });
+    let dispatchMode = 'n8n';
+    let vapiResult: { status: number; body: any } | null = null;
+    let n8nResult: { status: number; body: any } | null = null;
 
-    const n8nResponseBody = await parseResponseBody(response);
-    const n8nExplicitFailure =
-      n8nResponseBody &&
-      typeof n8nResponseBody === 'object' &&
-      ((n8nResponseBody as any).success === false ||
-        (n8nResponseBody as any).ok === false ||
-        (n8nResponseBody as any).executed === false ||
-        Boolean((n8nResponseBody as any).error));
+    if (assistantId && phoneNumberId && vapiApiKey) {
+      dispatchMode = 'direct_vapi';
+      vapiResult = await createVapiCall(vapiApiKey, {
+        assistantId,
+        phoneNumberId,
+        customer: {
+          number: customerNumber,
+          name: customerName
+        },
+        metadata: {
+          contactId: contactId || null,
+          campaignContactId,
+          campaignId: campaignId || 'manual',
+          phoneId: phoneNumberId,
+          cpf,
+          customerCpf: cpf,
+          customerName,
+          customerNumber
+        },
+        assistantOverrides: {
+          serverUrl: callbackUrl,
+          serverMessages: ['end-of-call-report'],
+          variableValues: {
+            Valorcpf: cpf,
+            cpf,
+            contactId: contactId || '',
+            campaignContactId: campaignContactId || '',
+            campaignId: campaignId || 'manual',
+            customerName,
+            customerNumber
+          }
+        }
+      });
 
-    if (!response.ok || n8nExplicitFailure) {
-      throw new Error(
-        typeof n8nResponseBody === 'string'
-          ? n8nResponseBody
-          : JSON.stringify(n8nResponseBody || { status: response.status, statusText: response.statusText })
-      );
+      const vapiCallId = vapiResult.body && typeof vapiResult.body === 'object' ? (vapiResult.body as any).id : null;
+      if (vapiCallId && callRecord?.id) {
+        await supabase.from('calls').update({ vapi_call_id: vapiCallId }).eq('id', callRecord.id);
+      }
+    } else {
+      const response = await fetch(n8nWebhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-source': 'node-backend',
+          'x-function-name': 'initiate-vapi-call',
+          'x-system': 'discador-vapi',
+          'x-version': '1.0'
+        },
+        body: JSON.stringify(n8nPayload)
+      });
+
+      const n8nResponseBody = await parseResponseBody(response);
+      const n8nExplicitFailure =
+        n8nResponseBody &&
+        typeof n8nResponseBody === 'object' &&
+        ((n8nResponseBody as any).success === false ||
+          (n8nResponseBody as any).ok === false ||
+          (n8nResponseBody as any).executed === false ||
+          Boolean((n8nResponseBody as any).error));
+
+      if (!response.ok || n8nExplicitFailure) {
+        throw new Error(
+          typeof n8nResponseBody === 'string'
+            ? n8nResponseBody
+            : JSON.stringify(n8nResponseBody || { status: response.status, statusText: response.statusText })
+        );
+      }
+
+      n8nResult = {
+        status: response.status,
+        body: n8nResponseBody
+      };
     }
 
     return res.json({
       success: true,
       message: 'Ligacao iniciada',
       callId: callRecord?.id ?? null,
-      n8n: {
-        status: response.status,
-        body: n8nResponseBody
-      }
+      dispatchMode,
+      vapi: vapiResult,
+      n8n: n8nResult
     });
   } catch (error: any) {
     console.error('[calls/initiate] error', error);
