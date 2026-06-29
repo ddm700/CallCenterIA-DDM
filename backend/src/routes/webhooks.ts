@@ -49,6 +49,42 @@ function firstNonEmpty(...values: unknown[]): string | null {
   return null;
 }
 
+function getRecordingUrls(payload: any, call: any) {
+  const payloadArtifact = isObject(payload?.artifact) ? payload.artifact : {};
+  const callArtifact = isObject(call?.artifact) ? call.artifact : {};
+
+  return {
+    recordingUrl: firstNonEmpty(
+      payloadArtifact.recording?.mono?.combinedUrl,
+      callArtifact.recording?.mono?.combinedUrl,
+      payloadArtifact.recordingUrl,
+      callArtifact.recordingUrl,
+      payload.recordingUrl,
+      call.recordingUrl,
+      payload.recording_url,
+      call.recording_url,
+      payloadArtifact.recording?.url,
+      callArtifact.recording?.url
+    ),
+    stereoRecordingUrl: firstNonEmpty(
+      payloadArtifact.recording?.stereoUrl,
+      callArtifact.recording?.stereoUrl,
+      payloadArtifact.stereoRecordingUrl,
+      callArtifact.stereoRecordingUrl,
+      payload.stereoRecordingUrl,
+      call.stereoRecordingUrl,
+      payload.stereo_recording_url,
+      call.stereo_recording_url
+    ),
+    artifactLogUrl: firstNonEmpty(
+      payloadArtifact.logUrl,
+      callArtifact.logUrl,
+      payloadArtifact.artifactLogUrl,
+      callArtifact.artifactLogUrl
+    )
+  };
+}
+
 webhooksRouter.post('/vapi/callback', async (req, res) => {
   try {
     let payload: any = req.body;
@@ -176,6 +212,8 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
           : String(call.analysis.successEvaluation);
     }
 
+    const recordingUrls = getRecordingUrls(payload, call);
+
     const updateData = {
       vapi_call_id: callId,
       campaign_contact_id: campaignContactIdFromMetadata ?? existingCall.campaign_contact_id ?? null,
@@ -191,9 +229,9 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
       summary: firstNonEmpty(call.analysis?.summary, call.summary, payload.summary),
       success_evaluation: successEvaluation,
       transcript: firstNonEmpty(call.artifact?.transcript, call.transcript, payload.transcript),
-      recording_url: firstNonEmpty(call.artifact?.recording?.url, call.recordingUrl, call.recording_url),
-      stereo_recording_url: firstNonEmpty(call.artifact?.recording?.stereoRecordingUrl, call.stereoRecordingUrl, call.stereo_recording_url),
-      artifact_log_url: call.artifact?.artifactLogUrl || null,
+      recording_url: recordingUrls.recordingUrl,
+      stereo_recording_url: recordingUrls.stereoRecordingUrl,
+      artifact_log_url: recordingUrls.artifactLogUrl,
       assistant_id: call.assistantId || null,
       phone_number_id: call.phoneNumberId || null,
       structured_name: structuredData.name || null,
