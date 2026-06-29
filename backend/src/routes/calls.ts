@@ -23,6 +23,29 @@ const chunkArray = <T>(items: T[], size: number): T[][] => {
   return chunks;
 };
 
+const isCompletedEnding = (endedReason: unknown): boolean =>
+  ['assistant-ended-call', 'customer-ended-call', 'Sem Débito', 'Sem DÃ©bito', 'Sem DÃƒÂ©bito'].includes(
+    String(endedReason || '')
+  );
+
+const getDisplayStatus = (status: unknown, endedReason: unknown): string => {
+  const normalizedStatus = String(status || '').toLowerCase();
+  const hasEndedReason = Boolean(String(endedReason || '').trim());
+
+  if (normalizedStatus === 'completed' || isCompletedEnding(endedReason)) {
+    return 'Concluída';
+  }
+
+  if (!hasEndedReason && normalizedStatus === 'queued') {
+    return 'Na fila';
+  }
+
+  if (['em_andamento', 'in-progress', 'in_progress'].includes(normalizedStatus)) {
+    return 'Em andamento';
+  }
+
+  return 'Falhou';
+};
 callsRouter.get('/', async (req, res) => {
   try {
     const rawStatus = req.query.status;
@@ -37,13 +60,17 @@ callsRouter.get('/', async (req, res) => {
       .filter(Boolean)
       .map((s) => (s === 'conpleted' ? 'completed' : s));
 
+    const historyOnly = String(req.query.history || '').toLowerCase() === 'true';
+
     let callsQuery = supabaseAdmin
       .from('calls')
       .select('*')
       .order('started_at', { ascending: false })
       .limit(1000);
 
-    if (normalizedStatusList.length === 1) {
+    if (historyOnly) {
+      callsQuery = callsQuery.not('vapi_call_id', 'is', null);
+    } else if (normalizedStatusList.length === 1) {
       callsQuery = callsQuery.eq('status', normalizedStatusList[0]);
     } else if (normalizedStatusList.length > 1) {
       const orExpr = normalizedStatusList.map((status) => `status.eq.${status}`).join(',');
@@ -130,11 +157,7 @@ callsRouter.get('/', async (req, res) => {
       const rawSuccessEval: string =
         analysis?.successEvaluation ?? meta?.successEvaluation ?? call.success_evaluation ?? '';
 
-      const normalizedStatus = String(call.status || '').toLowerCase();
-      let displayStatus = 'Falhou';
-      if (normalizedStatus === 'completed') displayStatus = 'Concluída';
-      else if (normalizedStatus === 'queued') displayStatus = 'Na fila';
-      else if (['em_andamento', 'in-progress', 'in_progress'].includes(normalizedStatus)) displayStatus = 'Em andamento';
+      const displayStatus = getDisplayStatus(call.status, call.ended_reason);
 
       return {
         id: call.id,

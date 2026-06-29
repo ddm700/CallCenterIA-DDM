@@ -434,96 +434,13 @@ export const supabaseService = {
   // --- CALLS ---
 
   async getCalls(): Promise<Call[]> {
-    const apiCallsData = await apiRequest<Call[]>('/api/calls?status=completed,failed');
-    return apiCallsData || [];
-
-    const { data, error } = await supabase
-      .from('calls')
-      .select(`
-        *,
-        campaign_contacts (
-          campaign_id,
-          contacts (
-            nome,
-            cpf,
-            telefone
-          ),
-          campaigns (
-            nome
-          )
-        )
-      `)
-      .order('started_at', { ascending: false })
-      .limit(1000);
-
-    if (error) {
-      console.error('Error fetching calls:', error);
-      throw error;
-    }
-
-    return (data || []).map((call: any) => {
-      const durationSeconds = call.duration_seconds || 0;
-      const minutes = Math.floor(durationSeconds / 60);
-      const seconds = durationSeconds % 60;
-      const durationFormatted = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-
-      // Robust Campaign Name Extraction
-      let campaignName = 'Direta';
-      if (call.campaign_name) {
-        campaignName = call.campaign_name;
-      } else if (call.campaign_contacts?.campaigns?.nome) {
-        campaignName = call.campaign_contacts.campaigns.nome;
-      }
-
-      // Extract raw summary and successEvaluation from metadata_raw
-      const meta = call.metadata_raw || {};
-      // VAPI stores these under analysis.summary / analysis.successEvaluation
-      const rawSummary: string =
-        meta?.analysis?.summary ||
-        meta?.summary ||
-        call.summary ||
-        '';
-      const rawSuccessEval: string =
-        meta?.analysis?.successEvaluation ??
-        meta?.successEvaluation ??
-        call.success_evaluation ??
-        '';
-
-      return {
-        id: call.id,
-        vapiCallId: call.vapi_call_id,
-        date: call.started_at ? new Date(call.started_at).toLocaleString('pt-BR') : '-',
-        campaignName: campaignName,
-        clientName: call.cliente || call.campaign_contacts?.contacts?.nome || 'Desconhecido',
-        cpf: call.cpf || call.campaign_contacts?.contacts?.cpf || '-',
-        phone: call.customer_number || call.campaign_contacts?.contacts?.telefone || '-',
-        duration: durationFormatted,
-        status: call.status === 'completed' ? 'Concluída' : 'Falhou',
-        reason: call.ended_reason || '-',
-        success: call.success_evaluation === 'true' || call.success_evaluation === true ||
-          String(rawSuccessEval).toLowerCase() === 'true',
-        cost: Number(call.custo_total) || 0,
-        custo_stt: Number(call.custo_stt) || 0,
-        custo_tts: Number(call.custo_tts) || 0,
-        custo_vapi: Number(call.custo_vapi) || 0,
-        custo_total: Number(call.custo_total) || 0,
-        recordingUrl: call.recording_url,
-        stereoRecordingUrl: call.stereo_recording_url,
-        transcript: call.transcript,
-        summary: call.summary,
-        structured_name: call.structured_name,
-        structured_rating_label: call.structured_rating_label,
-        structured_rating_text: call.structured_rating_text,
-        structured_purpose: call.structured_purpose,
-        structured_main_points: call.structured_main_points,
-        analysis: call.analysis,
-        metadata_raw: meta,
-        raw_summary: rawSummary,
-        raw_success_evaluation: String(rawSuccessEval)
-      };
-    });
+    const data = await apiRequest<Call[]>('/api/calls?history=true');
+    return data || [];
   },
 
+  async getCall(id: string): Promise<Call> {
+    return apiRequest<Call>(`/api/calls/${id}`);
+  },
   // --- SETTINGS (DB) ---
 
   async getSettingsFromDb(): Promise<Record<string, string>> {
