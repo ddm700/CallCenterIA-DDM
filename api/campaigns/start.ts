@@ -13,10 +13,10 @@ function nonNegativeInt(name: string, fallback: number): number {
 }
 
 const cfg = {
-  maxConcurrency:      Math.max(1, nonNegativeInt('CAMPAIGN_START_MAX_CONCURRENCY', 6)),
-  batchSize:           Math.max(1, nonNegativeInt('CAMPAIGN_START_BATCH_SIZE', 500)),
+  maxConcurrency:      Math.max(1, nonNegativeInt('CAMPAIGN_START_MAX_CONCURRENCY', 1)),
+  batchSize:           Math.max(1, nonNegativeInt('CAMPAIGN_START_BATCH_SIZE', 25)),
   pauseMs:             nonNegativeInt('CAMPAIGN_START_PAUSE_MS', 90000),
-  requestIntervalMs:   nonNegativeInt('CAMPAIGN_START_REQUEST_INTERVAL_MS', 250),
+  requestIntervalMs:   nonNegativeInt('CAMPAIGN_START_REQUEST_INTERVAL_MS', 5000),
   maxRetries:          nonNegativeInt('CAMPAIGN_START_MAX_RETRIES', 5),
   retryBaseMs:         nonNegativeInt('CAMPAIGN_START_RETRY_BASE_MS', 2000),
   retryMaxMs:          nonNegativeInt('CAMPAIGN_START_RETRY_MAX_MS', 30000),
@@ -368,6 +368,8 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
   const backendPublicUrl = await getBackendPublicUrl(supabase);
   const callbackUrl = `${backendPublicUrl}/api/webhooks/vapi/callback`;
   const pacer = new RequestPacer();
+  const campaignConcurrency = Math.max(1, Number(campaign.ligacoes_simultaneas) || 1);
+  const effectiveConcurrency = Math.min(cfg.maxConcurrency, campaignConcurrency);
 
   await writeServerLog(supabase, 'info', 'Dispatch prerequisites resolved', {
     campaignId,
@@ -376,6 +378,8 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
     n8nWebhookUrl,
     callbackUrl,
     maxConcurrency: cfg.maxConcurrency,
+    campaignConcurrency,
+    effectiveConcurrency,
     batchSize: cfg.batchSize,
     requestIntervalMs: cfg.requestIntervalMs,
     pauseMs: cfg.pauseMs,
@@ -383,7 +387,7 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
 
   console.log(
     `[campaigns/start] iniciando ${eligibleContacts.length} contatos ` +
-    `concorrencia=${cfg.maxConcurrency} batchSize=${cfg.batchSize} ` +
+    `concorrencia=${effectiveConcurrency} batchSize=${cfg.batchSize} ` +
     `requestIntervalMs=${cfg.requestIntervalMs} pauseMs=${cfg.pauseMs}`
   );
 
@@ -460,7 +464,7 @@ async function executeCampaignStart(campaignId: string): Promise<{ totalProcesse
   const allResults: ProcessResult[] = [];
   for (let i = 0; i < eligibleContacts.length; i += cfg.batchSize) {
     const batch = eligibleContacts.slice(i, i + cfg.batchSize);
-    const batchResult = await processWithConcurrency(batch, cfg.maxConcurrency, (c: any, idx: number) => processContact(c, i + idx));
+    const batchResult = await processWithConcurrency(batch, effectiveConcurrency, (c: any, idx: number) => processContact(c, i + idx));
     allResults.push(...batchResult);
 
     const ok = allResults.filter((r) => r.success).length;
