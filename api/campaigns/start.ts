@@ -13,10 +13,10 @@ function nonNegativeInt(name: string, fallback: number): number {
 }
 
 const cfg = {
-  maxConcurrency:      Math.max(1, nonNegativeInt('CAMPAIGN_START_MAX_CONCURRENCY', 1)),
-  batchSize:           Math.max(1, nonNegativeInt('CAMPAIGN_START_BATCH_SIZE', 25)),
+  maxConcurrency:      Math.max(1, nonNegativeInt('CAMPAIGN_START_MAX_CONCURRENCY', 6)),
+  batchSize:           Math.max(1, nonNegativeInt('CAMPAIGN_START_BATCH_SIZE', 500)),
   pauseMs:             nonNegativeInt('CAMPAIGN_START_PAUSE_MS', 90000),
-  requestIntervalMs:   nonNegativeInt('CAMPAIGN_START_REQUEST_INTERVAL_MS', 5000),
+  requestIntervalMs:   nonNegativeInt('CAMPAIGN_START_REQUEST_INTERVAL_MS', 250),
   maxRetries:          nonNegativeInt('CAMPAIGN_START_MAX_RETRIES', 5),
   retryBaseMs:         nonNegativeInt('CAMPAIGN_START_RETRY_BASE_MS', 2000),
   retryMaxMs:          nonNegativeInt('CAMPAIGN_START_RETRY_MAX_MS', 30000),
