@@ -54,5 +54,7 @@ export const env = {
   campaignStartRequestIntervalMs: nonNegativeInt('CAMPAIGN_START_REQUEST_INTERVAL_MS', 250),
   campaignStartMaxRetries: nonNegativeInt('CAMPAIGN_START_MAX_RETRIES', 5),
   campaignStartRetryBaseMs: nonNegativeInt('CAMPAIGN_START_RETRY_BASE_MS', 2000),
-  campaignStartRetryMaxMs: nonNegativeInt('CAMPAIGN_START_RETRY_MAX_MS', 30000)
+  campaignStartRetryMaxMs: nonNegativeInt('CAMPAIGN_START_RETRY_MAX_MS', 30000),
+  campaignDispatchTimeBudgetMs: nonNegativeInt('CAMPAIGN_DISPATCH_TIME_BUDGET_MS', 45000),
+  cronSecret: process.env.CRON_SECRET || ''
 };

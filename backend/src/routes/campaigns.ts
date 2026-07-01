@@ -12,7 +12,6 @@ import {
 
 type ProcessResult = { contactId: string; contactName: string; success: boolean; error?: string };
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const SUPABASE_PAGE_SIZE = 1000;
 const activeCampaignRuns = new Set<string>();
 
@@ -52,10 +51,15 @@ async function processWithConcurrency<T, TResult>(
   return results;
 }
 
-async function executeCampaignStart(campaignId: string): Promise<{
+async function executeCampaignStart(
+  campaignId: string,
+  deadlineAt: number = Date.now() + env.campaignDispatchTimeBudgetMs
+): Promise<{
   totalProcessed: number;
   successful: number;
   failed: number;
+  remainingPending: number;
+  completed: boolean;
 }> {
   const { data: campaign, error: campaignError } = await supabaseAdmin
     .from('campaigns')
@@ -118,7 +122,7 @@ async function executeCampaignStart(campaignId: string): Promise<{
   }
 
   if (campaignContacts.length === 0) {
-    return { totalProcessed: 0, successful: 0, failed: 0 };
+    return { totalProcessed: 0, successful: 0, failed: 0, remainingPending: 0, completed: true };
   }
 
   const now = new Date();
@@ -132,13 +136,15 @@ async function executeCampaignStart(campaignId: string): Promise<{
   });
 
   if (eligibleContacts.length === 0) {
-    return { totalProcessed: 0, successful: 0, failed: 0 };
+    return { totalProcessed: 0, successful: 0, failed: 0, remainingPending: 0, completed: true };
   }
 
   const n8nWebhookUrl = await getN8nWebhookUrl();
   const resolvedBackendPublicUrl = await getBackendPublicUrl();
   const callbackUrl = `${resolvedBackendPublicUrl}/api/webhooks/vapi/callback`;
   const pacer = new RequestPacer();
+  const campaignConcurrency = Math.max(1, Number(campaign.ligacoes_simultaneas) || 1);
+  const effectiveConcurrency = Math.min(env.campaignStartMaxConcurrency, campaignConcurrency);
 
   const processContact = async (cc: any, lineIndex: number): Promise<ProcessResult> => {
     const contact = Array.isArray(cc.contacts) ? cc.contacts[0] : cc.contacts;
@@ -205,49 +211,48 @@ async function executeCampaignStart(campaignId: string): Promise<{
   };
 
   const allResults: ProcessResult[] = [];
+  const chunkSize = Math.max(1, effectiveConcurrency);
+  let cursor = 0;
+  let stoppedForTimeBudget = false;
 
   console.log(
-    `[campaigns/start] iniciando ${eligibleContacts.length} contatos ` +
-      `com concorrencia=${env.campaignStartMaxConcurrency}, ` +
-      `batchSize=${env.campaignStartBatchSize}, ` +
+    `[campaigns/start] iniciando ate ${eligibleContacts.length} contatos elegiveis ` +
+      `com concorrencia=${effectiveConcurrency}, ` +
       `requestIntervalMs=${env.campaignStartRequestIntervalMs}, ` +
-      `pauseMs=${env.campaignStartPauseMs}`
+      `deadlineEmMs=${deadlineAt - Date.now()}`
   );
 
-  for (let i = 0; i < eligibleContacts.length; i += env.campaignStartBatchSize) {
-    const batch = eligibleContacts.slice(i, i + env.campaignStartBatchSize);
-
-    const batchResult = await processWithConcurrency(
-      batch,
-      env.campaignStartMaxConcurrency,
-      (contact: any, index: number) => processContact(contact, i + index)
-    );
-
-    allResults.push(...batchResult);
-
-    const processedCount = allResults.length;
-    const successfulCount = allResults.filter((result) => result.success).length;
-    const failedCount = processedCount - successfulCount;
-    console.log(
-      `[campaigns/start] lote finalizado: processados=${processedCount} ` +
-        `sucesso=${successfulCount} falhas=${failedCount}`
-    );
-
-    const hasMore = i + env.campaignStartBatchSize < eligibleContacts.length;
-
-    if (hasMore && env.campaignStartPauseMs > 0) {
-      console.log(`[campaigns/start] pausando ${env.campaignStartPauseMs} ms antes do proximo lote`);
-      await sleep(env.campaignStartPauseMs);
+  while (cursor < eligibleContacts.length) {
+    if (Date.now() >= deadlineAt) {
+      stoppedForTimeBudget = true;
+      break;
     }
+
+    const chunk = eligibleContacts.slice(cursor, cursor + chunkSize);
+    const chunkResult = await processWithConcurrency(chunk, effectiveConcurrency, (contact: any, index: number) =>
+      processContact(contact, cursor + index)
+    );
+
+    allResults.push(...chunkResult);
+    cursor += chunk.length;
   }
 
   const successful = allResults.filter((r) => r.success).length;
-  const failed = allResults.filter((r) => !r.success).length;
+  const failed = allResults.length - successful;
+  const remainingPending = eligibleContacts.length - allResults.length;
+
+  console.log(
+    `[campaigns/start] ciclo finalizado: processados=${allResults.length} ` +
+      `sucesso=${successful} falhas=${failed} restantes=${remainingPending} ` +
+      `${stoppedForTimeBudget ? '(interrompido por orcamento de tempo, retomara no proximo ciclo)' : '(concluido)'}`
+  );
 
   return {
     totalProcessed: allResults.length,
     successful,
-    failed
+    failed,
+    remainingPending,
+    completed: remainingPending === 0
   };
 }
 
@@ -267,26 +272,23 @@ campaignsRouter.post('/start', async (req, res) => {
     }
 
     activeCampaignRuns.add(campaignId);
+    const summary = await executeCampaignStart(campaignId);
+    activeCampaignRuns.delete(campaignId);
 
-    // Retorna 202 imediatamente e processa em background
-    void (async () => {
-      try {
-        const summary = await executeCampaignStart(campaignId);
-        console.log(
-          `[campaigns/start] execucao concluida campaign=${campaignId} ` +
-            `processados=${summary.totalProcessed} sucesso=${summary.successful} falhas=${summary.failed}`
-        );
-      } catch (error: any) {
-        console.error('[campaigns/start] background error', error);
-      } finally {
-        activeCampaignRuns.delete(campaignId);
-      }
-    })();
+    console.log(
+      `[campaigns/start] ciclo concluido campaign=${campaignId} ` +
+        `processados=${summary.totalProcessed} sucesso=${summary.successful} falhas=${summary.failed} ` +
+        `restantes=${summary.remainingPending}`
+    );
 
     return res.status(202).json({
       success: true,
-      message: 'Processamento iniciado em background',
-      campaignId
+      message: summary.completed
+        ? 'Processamento concluido'
+        : `Ciclo parcial processado. ${summary.remainingPending} contatos permanecem pendentes e serao ` +
+          'retomados automaticamente pelo dispatch-cron (ou numa nova chamada a este endpoint).',
+      campaignId,
+      ...summary
     });
   } catch (error: any) {
     if (campaignId) {
@@ -294,5 +296,47 @@ campaignsRouter.post('/start', async (req, res) => {
     }
     console.error('[campaigns/start] error', error);
     return res.status(500).json({ success: false, error: error.message || 'Erro ao iniciar campanha' });
+  }
+});
+
+campaignsRouter.get('/dispatch-cron', async (req, res) => {
+  if (!env.cronSecret) {
+    console.error('[campaigns/dispatch-cron] CRON_SECRET nao configurado; recusando execucao');
+    return res.status(500).json({ success: false, error: 'CRON_SECRET nao configurado no backend' });
+  }
+
+  if (req.headers.authorization !== `Bearer ${env.cronSecret}`) {
+    return res.status(401).json({ success: false, error: 'unauthorized' });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin.from('campaigns').select('id, nome').eq('ativa', true);
+    if (error) throw new Error(error.message);
+
+    const activeCampaigns = (data || []) as Array<{ id: string; nome: string }>;
+    const deadlineAt = Date.now() + env.campaignDispatchTimeBudgetMs;
+    const results: Array<{ campaignId: string; nome: string; error?: string } & Record<string, unknown>> = [];
+
+    for (const campaign of shuffleArray(activeCampaigns)) {
+      if (Date.now() >= deadlineAt || activeCampaignRuns.has(campaign.id)) continue;
+
+      activeCampaignRuns.add(campaign.id);
+      try {
+        const summary = await executeCampaignStart(campaign.id, deadlineAt);
+        if (summary.totalProcessed > 0) {
+          results.push({ campaignId: campaign.id, nome: campaign.nome, ...summary });
+        }
+      } catch (campaignError: any) {
+        console.error(`[campaigns/dispatch-cron] erro na campanha ${campaign.id}`, campaignError.message);
+        results.push({ campaignId: campaign.id, nome: campaign.nome, error: campaignError.message });
+      } finally {
+        activeCampaignRuns.delete(campaign.id);
+      }
+    }
+
+    return res.json({ success: true, processed: results });
+  } catch (error: any) {
+    console.error('[campaigns/dispatch-cron] error', error);
+    return res.status(500).json({ success: false, error: error.message || 'Erro ao rodar dispatch cron' });
   }
 });

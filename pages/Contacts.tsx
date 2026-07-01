@@ -57,12 +57,28 @@ export const Contacts: React.FC = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [contactsData, campaignsData] = await Promise.all([
+      const [contactsResult, campaignsResult] = await Promise.allSettled([
         supabaseService.getContacts(),
         supabaseService.getCampaigns()
       ]);
-      setContacts(contactsData);
-      setCampaignsList(campaignsData);
+
+      if (contactsResult.status === 'fulfilled') {
+        setContacts(contactsResult.value);
+      } else {
+        setContacts([]);
+        const message = contactsResult.reason instanceof Error ? contactsResult.reason.message : String(contactsResult.reason);
+        console.error('Error fetching contacts:', contactsResult.reason);
+        logService.addLog('error', 'Database', 'Erro ao carregar contatos', { error: message });
+      }
+
+      if (campaignsResult.status === 'fulfilled') {
+        setCampaignsList(campaignsResult.value);
+      } else {
+        setCampaignsList([]);
+        const message = campaignsResult.reason instanceof Error ? campaignsResult.reason.message : String(campaignsResult.reason);
+        console.error('Error fetching campaigns:', campaignsResult.reason);
+        logService.addLog('error', 'Database', 'Erro ao carregar campanhas', { error: message });
+      }
     } catch (error: any) {
       console.error(error);
       logService.addLog('error', 'Database', 'Erro ao carregar dados', { error: error.message });
