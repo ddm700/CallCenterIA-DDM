@@ -109,7 +109,7 @@ async function executeCampaignStart(
         `
       )
       .eq('campaign_id', campaignId)
-      .in('status', ['pendente', 'em_andamento'])
+      .eq('status', 'pendente')
       .range(from, from + SUPABASE_PAGE_SIZE - 1);
 
     if (contactsError) throw new Error(`Erro ao buscar contatos: ${contactsError.message}`);
@@ -144,8 +144,33 @@ async function executeCampaignStart(
     typeof options.maxContacts === 'number' && options.maxContacts > 0
       ? Math.floor(options.maxContacts)
       : eligibleContacts.length;
-  const contactsToProcess = eligibleContacts.slice(0, maxContacts);
+  let contactsToProcess = eligibleContacts.slice(0, maxContacts);
   const includeInterBatchPause = options.includeInterBatchPause ?? true;
+
+  const contactIdsToClaim = contactsToProcess.map((contact) => contact.id);
+  const { data: claimedRows, error: claimError } = await supabaseAdmin
+    .from('campaign_contacts')
+    .update({ status: 'processando' })
+    .in('id', contactIdsToClaim)
+    .eq('status', 'pendente')
+    .select('id');
+
+  if (claimError) {
+    throw new Error(`Erro ao reservar contatos da campanha: ${claimError.message}`);
+  }
+
+  const claimedIds = new Set((claimedRows || []).map((row: any) => row.id));
+  contactsToProcess = contactsToProcess.filter((contact) => claimedIds.has(contact.id));
+
+  if (contactsToProcess.length === 0) {
+    return {
+      totalProcessed: 0,
+      successful: 0,
+      failed: 0,
+      remainingPending: eligibleContacts.length,
+      completed: false
+    };
+  }
 
   const n8nWebhookUrl = await getN8nWebhookUrl();
   const resolvedBackendPublicUrl = await getBackendPublicUrl();
@@ -157,6 +182,11 @@ async function executeCampaignStart(
     const phoneNumber = contact?.telefone ?? null;
 
     if (!phoneNumber || !contact) {
+      await supabaseAdmin
+        .from('campaign_contacts')
+        .update({ status: 'pendente' })
+        .eq('id', cc.id)
+        .eq('status', 'processando');
       return {
         contactId: contact?.id || cc.contact_id,
         contactName: contact?.nome || 'Desconhecido',
@@ -207,11 +237,17 @@ async function executeCampaignStart(
           tentativas_realizadas: (cc.tentativas_realizadas || 0) + 1,
           ultima_tentativa: new Date().toISOString()
         })
-        .eq('id', cc.id);
+        .eq('id', cc.id)
+        .eq('status', 'processando');
       if (updateError) console.warn('Nao foi possivel atualizar campaign_contacts', updateError.message);
 
       return { contactId: contact.id, contactName: contact.nome, success: true };
     } catch (error: any) {
+      await supabaseAdmin
+        .from('campaign_contacts')
+        .update({ status: 'pendente' })
+        .eq('id', cc.id)
+        .eq('status', 'processando');
       return { contactId: contact.id, contactName: contact.nome, success: false, error: error.message };
     }
   };
@@ -255,7 +291,7 @@ async function executeCampaignStart(
 
   const successful = allResults.filter((r) => r.success).length;
   const failed = allResults.filter((r) => !r.success).length;
-  const remainingPending = eligibleContacts.length - allResults.length;
+  const remainingPending = Math.max(0, eligibleContacts.length - successful);
 
   return {
     totalProcessed: allResults.length,
