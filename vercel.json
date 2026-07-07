@@ -7,7 +7,6 @@
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "functions": {
-    "api/campaigns/start.ts": { "maxDuration": 60 },
     "api/[...path].ts": { "maxDuration": 60 }
   }
 }
