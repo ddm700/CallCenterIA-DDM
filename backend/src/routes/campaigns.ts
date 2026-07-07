@@ -11,10 +11,15 @@ import {
 } from '../services/callDispatch.js';
 
 type ProcessResult = { contactId: string; contactName: string; success: boolean; error?: string };
+type ExecuteCampaignStartOptions = {
+  maxContacts?: number;
+  includeInterBatchPause?: boolean;
+};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const SUPABASE_PAGE_SIZE = 1000;
 const activeCampaignRuns = new Set<string>();
+const isServerlessRuntime = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array];
@@ -52,10 +57,15 @@ async function processWithConcurrency<T, TResult>(
   return results;
 }
 
-async function executeCampaignStart(campaignId: string): Promise<{
+async function executeCampaignStart(
+  campaignId: string,
+  options: ExecuteCampaignStartOptions = {}
+): Promise<{
   totalProcessed: number;
   successful: number;
   failed: number;
+  remainingPending: number;
+  completed: boolean;
 }> {
   const { data: campaign, error: campaignError } = await supabaseAdmin.from('campaigns').select('*').eq('id', campaignId).single();
   if (campaignError || !campaign) throw new Error('Campanha nao encontrada');
@@ -113,7 +123,7 @@ async function executeCampaignStart(campaignId: string): Promise<{
   }
 
   if (campaignContacts.length === 0) {
-    return { totalProcessed: 0, successful: 0, failed: 0 };
+    return { totalProcessed: 0, successful: 0, failed: 0, remainingPending: 0, completed: true };
   }
 
   const now = new Date();
@@ -127,8 +137,15 @@ async function executeCampaignStart(campaignId: string): Promise<{
   });
 
   if (eligibleContacts.length === 0) {
-    return { totalProcessed: 0, successful: 0, failed: 0 };
+    return { totalProcessed: 0, successful: 0, failed: 0, remainingPending: 0, completed: true };
   }
+
+  const maxContacts =
+    typeof options.maxContacts === 'number' && options.maxContacts > 0
+      ? Math.floor(options.maxContacts)
+      : eligibleContacts.length;
+  const contactsToProcess = eligibleContacts.slice(0, maxContacts);
+  const includeInterBatchPause = options.includeInterBatchPause ?? true;
 
   const n8nWebhookUrl = await getN8nWebhookUrl();
   const resolvedBackendPublicUrl = await getBackendPublicUrl();
@@ -202,15 +219,15 @@ async function executeCampaignStart(campaignId: string): Promise<{
   const allResults: ProcessResult[] = [];
 
   console.log(
-    `[campaigns/start] iniciando ${eligibleContacts.length} contatos ` +
+    `[campaigns/start] iniciando ${contactsToProcess.length}/${eligibleContacts.length} contatos elegiveis ` +
       `com concorrencia=${env.campaignStartMaxConcurrency}, ` +
       `batchSize=${env.campaignStartBatchSize}, ` +
       `requestIntervalMs=${env.campaignStartRequestIntervalMs}, ` +
-      `pauseMs=${env.campaignStartPauseMs}`
+      `pauseMs=${includeInterBatchPause ? env.campaignStartPauseMs : 0}`
   );
 
-  for (let i = 0; i < eligibleContacts.length; i += env.campaignStartBatchSize) {
-    const batch = eligibleContacts.slice(i, i + env.campaignStartBatchSize);
+  for (let i = 0; i < contactsToProcess.length; i += env.campaignStartBatchSize) {
+    const batch = contactsToProcess.slice(i, i + env.campaignStartBatchSize);
 
     const batchResult = await processWithConcurrency(
       batch,
@@ -228,9 +245,9 @@ async function executeCampaignStart(campaignId: string): Promise<{
         `sucesso=${successfulCount} falhas=${failedCount}`
     );
 
-    const hasMore = i + env.campaignStartBatchSize < eligibleContacts.length;
+    const hasMore = i + env.campaignStartBatchSize < contactsToProcess.length;
 
-    if (hasMore && env.campaignStartPauseMs > 0) {
+    if (includeInterBatchPause && hasMore && env.campaignStartPauseMs > 0) {
       console.log(`[campaigns/start] pausando ${env.campaignStartPauseMs} ms antes do proximo lote`);
       await sleep(env.campaignStartPauseMs);
     }
@@ -238,11 +255,14 @@ async function executeCampaignStart(campaignId: string): Promise<{
 
   const successful = allResults.filter((r) => r.success).length;
   const failed = allResults.filter((r) => !r.success).length;
+  const remainingPending = eligibleContacts.length - allResults.length;
 
   return {
     totalProcessed: allResults.length,
     successful,
-    failed
+    failed,
+    remainingPending,
+    completed: remainingPending === 0
   };
 }
 
@@ -262,6 +282,30 @@ campaignsRouter.post('/start', async (req, res) => {
     }
 
     activeCampaignRuns.add(campaignId);
+
+    if (isServerlessRuntime) {
+      const summary = await executeCampaignStart(campaignId, {
+        maxContacts: env.campaignStartServerlessBatchSize,
+        includeInterBatchPause: false
+      });
+
+      activeCampaignRuns.delete(campaignId);
+
+      console.log(
+        `[campaigns/start] lote serverless concluido campaign=${campaignId} ` +
+          `processados=${summary.totalProcessed} sucesso=${summary.successful} falhas=${summary.failed} ` +
+          `restantes=${summary.remainingPending}`
+      );
+
+      return res.json({
+        success: true,
+        message: summary.completed
+          ? 'Processamento concluido'
+          : `Lote processado. ${summary.remainingPending} contatos permanecem pendentes para o proximo acionamento.`,
+        campaignId,
+        ...summary
+      });
+    }
 
     void (async () => {
       try {
