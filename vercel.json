@@ -1,19 +1,13 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
+  "installCommand": "npm install && npm install --prefix backend",
+  "buildCommand": "npm run build --prefix backend && npm run build",
   "outputDirectory": "dist",
-  "env": {
-    "FRONTEND_ORIGIN": "*"
-  },
-  "functions": {
-    "api/campaigns/start.ts": { "maxDuration": 60 },
-    "api/campaigns/dispatch-cron.ts": { "maxDuration": 60 },
-    "api/[...path].ts": { "maxDuration": 60 }
-  },
-  "crons": [
-    { "path": "/api/campaigns/dispatch-cron", "schedule": "*/1 * * * *" }
-  ],
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
-  ]
+  ],
+  "functions": {
+    "api/campaigns/start.ts": { "maxDuration": 60 },
+    "api/[...path].ts": { "maxDuration": 60 }
+  }
 }
