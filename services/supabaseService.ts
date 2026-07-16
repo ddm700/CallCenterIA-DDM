@@ -1,22 +1,102 @@
-import { supabase } from '../lib/supabaseClient';
+﻿import { supabase } from '../lib/supabaseClient';
 import { apiRequest } from '../lib/apiClient';
+import { getSupabaseSettings } from '../lib/settings';
 import { Campaign, Contact, Call, AcordoKpi } from '../types';
+
+const IMPORT_CHUNK_SIZE = 300;
+
+const chunkArray = <T,>(arr: T[], size: number): T[][] =>
+  Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, (i + 1) * size));
+
+async function importContactsDirectly(
+  campaignId: string,
+  contactsData: { nome: string; cpf: string; telefone: string; instituicao: string }[],
+  onProgress?: (percent: number, label: string) => void
+) {
+  const report = (percent: number, label: string) => onProgress?.(Math.round(percent), label);
+
+  report(5, 'Normalizando dados...');
+  const contactsPayload = contactsData.map((contact) => {
+    const cleanPhone = contact.telefone.replace(/\D/g, '');
+    const normalizedPhone =
+      cleanPhone.length === 12 || cleanPhone.length === 13 ? `+${cleanPhone}` : `+55${cleanPhone}`;
+
+    return {
+      nome: contact.nome || null,
+      cpf: contact.cpf.replace(/\D/g, ''),
+      instituicao: contact.instituicao || null,
+      telefone: normalizedPhone
+    };
+  });
+
+  report(10, 'Verificando contatos existentes...');
+  const allPhones = contactsPayload.map((contact) => contact.telefone);
+  const phoneChunks = chunkArray(allPhones, IMPORT_CHUNK_SIZE);
+  const existingPhoneMap = new Map<string, string>();
+
+  for (let i = 0; i < phoneChunks.length; i++) {
+    const { data, error } = await supabase.from('contacts').select('id, telefone').in('telefone', phoneChunks[i]);
+    if (error) throw error;
+    data?.forEach((contact: any) => existingPhoneMap.set(contact.telefone, contact.id));
+    report(10 + ((i + 1) / Math.max(phoneChunks.length, 1)) * 25, `Verificando contatos (${i + 1}/${phoneChunks.length})...`);
+  }
+
+  const newContacts = contactsPayload.filter((contact) => !existingPhoneMap.has(contact.telefone));
+  const insertChunks = chunkArray(newContacts, IMPORT_CHUNK_SIZE);
+
+  for (let i = 0; i < insertChunks.length; i++) {
+    const { data, error } = await supabase.from('contacts').insert(insertChunks[i]).select('id, telefone');
+    if (error) throw error;
+    data?.forEach((contact: any) => existingPhoneMap.set(contact.telefone, contact.id));
+    report(35 + ((i + 1) / Math.max(insertChunks.length, 1)) * 35, `Inserindo contatos (${i + 1}/${insertChunks.length})...`);
+  }
+
+  if (insertChunks.length === 0) report(70, 'Nenhum contato novo para inserir.');
+
+  const processedIds = new Set<string>();
+  const campaignPayload: Array<{ campaign_id: string; contact_id: string; status: string; tentativas: number }> = [];
+
+  for (const contact of contactsPayload) {
+    const contactId = existingPhoneMap.get(contact.telefone);
+    if (contactId && !processedIds.has(contactId)) {
+      campaignPayload.push({ campaign_id: campaignId, contact_id: contactId, status: 'pendente', tentativas: 0 });
+      processedIds.add(contactId);
+    }
+  }
+
+  const linkChunks = chunkArray(campaignPayload, IMPORT_CHUNK_SIZE);
+  for (let i = 0; i < linkChunks.length; i++) {
+    const { error: upsertErr } = await supabase
+      .from('campaign_contacts')
+      .upsert(linkChunks[i], { onConflict: 'campaign_id,contact_id', ignoreDuplicates: true });
+
+    if (upsertErr) {
+      const { error: insertErr } = await supabase.from('campaign_contacts').insert(linkChunks[i]);
+      if (insertErr && !insertErr.message.includes('duplicate')) throw insertErr;
+    }
+
+    report(70 + ((i + 1) / Math.max(linkChunks.length, 1)) * 30, `Vinculando contatos (${i + 1}/${linkChunks.length})...`);
+  }
+
+  report(100, 'Importacao concluida.');
+
+  return {
+    success: true,
+    totalRecebidos: contactsData.length,
+    novosInseridos: newContacts.length,
+    vinculados: campaignPayload.length,
+    fallback: 'supabase-client'
+  };
+}
 
 export const supabaseService = {
 
   // --- CAMPAIGNS ---
 
   async getCampaigns(): Promise<Campaign[]> {
-    try {
-      const response = await apiRequest<{ success: boolean; campaigns?: Campaign[] }>('/api/campaigns/list', {
-        method: 'GET'
-      });
-
-      if (Array.isArray(response.campaigns)) {
-        return response.campaigns;
-      }
-    } catch (apiError) {
-      console.warn('[campaigns/list] endpoint unavailable; falling back to Supabase client.', apiError);
+    const { url, key } = getSupabaseSettings();
+    if (!url || !key) {
+      throw new Error('Supabase nÃ£o configurado. Preencha Project URL e Anon Key na tela ConfiguraÃ§Ãµes.');
     }
 
     const { data, error } = await supabase
@@ -81,17 +161,6 @@ export const supabaseService = {
   },
 
   async createCampaign(campaignData: Partial<Campaign>): Promise<Campaign | null> {
-    try {
-      const response = await apiRequest<{ success: boolean; campaign?: Campaign }>('/api/campaigns/save', {
-        method: 'POST',
-        body: JSON.stringify({ campaign: campaignData })
-      });
-
-      return response.campaign || null;
-    } catch (apiError) {
-      console.warn('[campaigns/save] endpoint unavailable; falling back to Supabase client.', apiError);
-    }
-
     const dbPayload = {
       nome: campaignData.name,
       instituicao: campaignData.institution,
@@ -122,16 +191,6 @@ export const supabaseService = {
   },
 
   async updateCampaign(id: string, campaignData: Partial<Campaign>): Promise<void> {
-    try {
-      await apiRequest<{ success: boolean }>('/api/campaigns/save', {
-        method: 'POST',
-        body: JSON.stringify({ id, campaign: campaignData })
-      });
-      return;
-    } catch (apiError) {
-      console.warn('[campaigns/save] endpoint unavailable; falling back to Supabase client.', apiError);
-    }
-
     const dbPayload = {
       nome: campaignData.name,
       instituicao: campaignData.institution,
@@ -157,16 +216,6 @@ export const supabaseService = {
   },
 
   async toggleCampaignStatus(id: string, isActive: boolean): Promise<void> {
-    try {
-      await apiRequest<{ success: boolean }>('/api/campaigns/status', {
-        method: 'POST',
-        body: JSON.stringify({ id, isActive })
-      });
-      return;
-    } catch (apiError) {
-      console.warn('[campaigns/status] endpoint unavailable; falling back to Supabase client.', apiError);
-    }
-
     const { error } = await supabase
       .from('campaigns')
       .update({
@@ -270,7 +319,7 @@ export const supabaseService = {
       return { nome: c.nome, cpf: c.cpf.replace(/\D/g, ''), instituicao: c.instituicao, telefone: normalizedPhone };
     });
 
-    // 2. Check existing phones in batches (Phase 0–25%)
+    // 2. Check existing phones in batches (Phase 0â€“25%)
     report(5, 'Verificando duplicatas...');
     const allPhones = contactsPayload.map(c => c.telefone);
     const phoneChunks = chunkArray(allPhones, CHUNK);
@@ -287,7 +336,7 @@ export const supabaseService = {
       report(5 + ((i + 1) / phoneChunks.length) * 20, `Verificando duplicatas (lote ${i + 1}/${phoneChunks.length})...`);
     }
 
-    // 3. Insert new contacts in batches (Phase 25–60%)
+    // 3. Insert new contacts in batches (Phase 25â€“60%)
     const newContacts = contactsPayload.filter(c => !existingPhoneMap.has(c.telefone));
     const insertChunks = chunkArray(newContacts, CHUNK);
 
@@ -305,7 +354,7 @@ export const supabaseService = {
     if (insertChunks.length === 0) report(60, 'Nenhum contato novo para inserir.');
 
     // 4. Build campaign_contacts payload
-    report(62, 'Vinculando à campanha...');
+    report(62, 'Vinculando Ã  campanha...');
     const campaignPayload: any[] = [];
     const processedIds = new Set<string>();
 
@@ -317,7 +366,7 @@ export const supabaseService = {
       }
     }
 
-    // 5. Upsert campaign links in batches (Phase 62–100%)
+    // 5. Upsert campaign links in batches (Phase 62â€“100%)
     const linkChunks = chunkArray(campaignPayload, CHUNK);
 
     for (let i = 0; i < linkChunks.length; i++) {
@@ -334,7 +383,7 @@ export const supabaseService = {
       report(62 + ((i + 1) / linkChunks.length) * 38, `Vinculando contatos (lote ${i + 1}/${linkChunks.length})...`);
     }
 
-    report(100, 'Importação concluída!');
+    report(100, 'ImportaÃ§Ã£o concluÃ­da!');
   },
   */
 
@@ -354,15 +403,25 @@ export const supabaseService = {
 
     onProgress?.(5, 'Enviando dados para processamento...');
 
-    const data = await apiRequest<any>('/api/contacts/import', {
-      method: 'POST',
-      body: JSON.stringify({
-        campaignId,
-        contacts: contactsData
-      })
-    });
+    let data: any;
+    try {
+      data = await apiRequest<any>('/api/contacts/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          campaignId,
+          contacts: contactsData
+        })
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (!message.includes('404')) throw error;
 
-    onProgress?.(100, 'Importação concluída.');
+      console.warn('[contacts/import] endpoint /api/contacts/import retornou 404; usando fallback Supabase client.');
+      onProgress?.(10, 'Endpoint indisponivel. Importando direto pelo Supabase...');
+      data = await importContactsDirectly(campaignId, contactsData, onProgress);
+    }
+
+    onProgress?.(100, 'ImportaÃ§Ã£o concluÃ­da.');
 
     return data;
   },
@@ -441,6 +500,7 @@ export const supabaseService = {
   async getCall(id: string): Promise<Call> {
     return apiRequest<Call>(`/api/calls/${id}`);
   },
+
   // --- SETTINGS (DB) ---
 
   async getSettingsFromDb(): Promise<Record<string, string>> {
@@ -536,8 +596,6 @@ export const supabaseService = {
     return data || [];
   },
 
-  // --- QUALITY (Views) ---
-
   // --- KPI ACORDOS ---
 
   async getAcordosKPIs(): Promise<AcordoKpi[]> {
@@ -563,26 +621,355 @@ export const supabaseService = {
       throw formalizadosError;
     }
 
-    const formalizadosByCampaignDate = new Map<string, { count: number; value: number }>();
+    const normalizeText = (value: unknown) =>
+      String(value || '')
+        .trim()
+        .toLowerCase();
+    const normalizeCpf = (value: unknown) => String(value || '').replace(/\D/g, '');
+    const normalizeUrl = (value: unknown) =>
+      String(value || '')
+        .trim()
+        .replace(/^https?:\/\//i, '')
+        .replace(/\/+$/, '')
+        .toLowerCase();
+    const getDateOnly = (value: unknown) => {
+      const str = String(value || '');
+      return str.length >= 10 ? str.slice(0, 10) : '';
+    };
+    const addDays = (date: string, days: number) => {
+      const parsed = new Date(`${date}T00:00:00.000Z`);
+      parsed.setUTCDate(parsed.getUTCDate() + days);
+      return parsed.toISOString().slice(0, 10);
+    };
+    const hasAgreementPhrase = (call: any) => {
+      const searchable = [
+        call.transcript,
+        call.summary,
+        call.metadata_raw ? JSON.stringify(call.metadata_raw) : ''
+      ].join(' ').toLowerCase();
 
-    (formalizados || []).forEach((row: any) => {
-      const campaignId = String(row.campaign_id || '');
+      return searchable.includes('acordo formalizado');
+    };
+    const firstNonEmpty = (...values: unknown[]) => {
+      for (const value of values) {
+        if (value === null || value === undefined) continue;
+        const str = String(value).trim();
+        if (str) return str;
+      }
+      return '';
+    };
+    const getAgreementRecordingUrl = (agreement: any) =>
+      firstNonEmpty(
+        agreement.recording_url,
+        agreement.recordingUrl,
+        agreement.url,
+        agreement['url '],
+        agreement.audio_url,
+        agreement.audio,
+        agreement.stereo_recording_url,
+        agreement.stereoRecordingUrl
+      );
+    const assistantNamesById = new Map<string, string>();
+    try {
+      const resources = await apiRequest<{ assistants?: Array<{ id?: string; name?: string; model?: { model?: string } }> }>(
+        '/api/vapi/resources',
+        { method: 'GET' }
+      );
+      (resources.assistants || []).forEach((assistant) => {
+        if (!assistant.id) return;
+        const name = firstNonEmpty(assistant.name, assistant.model?.model);
+        if (name) assistantNamesById.set(assistant.id, name);
+      });
+    } catch (resourceError) {
+      console.warn('[acordos-kpis] nao foi possivel buscar nomes dos assistentes VAPI:', resourceError);
+    }
+    const resolveAgentName = (value: unknown) => {
+      const str = firstNonEmpty(value);
+      return str ? assistantNamesById.get(str) || str : '';
+    };
+    const getResponsibleAgent = (agreement: any, call: any) => {
+      const candidates = [
+        agreement.agente_responsavel,
+        agreement.responsavel,
+        agreement.responsavel_acordo,
+        agreement.agente,
+        agreement.agent_name,
+        agreement.agent,
+        agreement.assistant_name,
+        call?.assistant_id
+      ];
+
+      for (const candidate of candidates) {
+        const resolved = resolveAgentName(candidate);
+        if (resolved) return resolved;
+      }
+
+      return '';
+    };
+    const buildKeys = (row: any, referenceDate: string) =>
+      [
+        row.campaign_id ? `${row.campaign_id}|${referenceDate}` : '',
+        row.campanha ? `${normalizeText(row.campanha)}|${referenceDate}` : ''
+      ].filter(Boolean);
+
+    const formalizadosRows = formalizados || [];
+    const agreementRecordingUrls = Array.from(
+      new Set(formalizadosRows.map((row: any) => normalizeUrl(getAgreementRecordingUrl(row))).filter(Boolean))
+    );
+
+    const callsByRecordingUrl = new Map<string, any>();
+    const productionAgreementCalls: any[] = [];
+    const kpiRows = kpis || [];
+    const referenceDates = Array.from(
+      new Set(
+        [
+          ...kpiRows.map((row: any) => getDateOnly(row.referencia_data)),
+          ...formalizadosRows.map((row: any) => getDateOnly(row.created_at))
+        ].filter(Boolean)
+      )
+    ).sort();
+    const campaignNames = Array.from(
+      new Set(
+        [
+          ...kpiRows.map((row: any) => normalizeText(row.campanha_nome)),
+          ...formalizadosRows.map((row: any) => normalizeText(row.campanha))
+        ].filter(Boolean)
+      )
+    );
+
+    if (referenceDates.length > 0) {
+      const { data: phraseCallRows, error: phraseCallRowsError } = await supabase
+        .from('calls')
+        .select(
+          'id, vapi_call_id, assistant_id, campanha, cpf, cliente, customer_number, started_at, ended_at, duration_seconds, status, ended_reason, recording_url, stereo_recording_url, transcript, summary, metadata_raw, custo_total, custo_stt, custo_tts, custo_vapi'
+        )
+        .not('recording_url', 'is', null)
+        .gte('started_at', `${referenceDates[0]}T00:00:00.000Z`)
+        .lt('started_at', `${addDays(referenceDates[referenceDates.length - 1], 1)}T00:00:00.000Z`)
+        .order('started_at', { ascending: false })
+        .limit(10000);
+
+      if (phraseCallRowsError) {
+        console.error('Error fetching production agreement calls:', phraseCallRowsError);
+        throw phraseCallRowsError;
+      }
+
+      (phraseCallRows || [])
+        .filter((call: any) => campaignNames.length === 0 || campaignNames.includes(normalizeText(call.campanha)))
+        .filter(hasAgreementPhrase)
+        .forEach((call: any) => {
+          productionAgreementCalls.push(call);
+
+          const recordingUrl = normalizeUrl(call.recording_url);
+          const stereoRecordingUrl = normalizeUrl(call.stereo_recording_url);
+          if (recordingUrl) callsByRecordingUrl.set(recordingUrl, call);
+          if (stereoRecordingUrl) callsByRecordingUrl.set(stereoRecordingUrl, call);
+        });
+    }
+
+    for (const urlChunk of chunkArray(agreementRecordingUrls, 100)) {
+      const orExpr = urlChunk
+        .flatMap((url) => [
+          `recording_url.ilike.%${url}%`,
+          `stereo_recording_url.ilike.%${url}%`
+        ])
+        .join(',');
+      const { data: callRows, error: callRowsError } = await supabase
+        .from('calls')
+        .select(
+          'id, vapi_call_id, assistant_id, campanha, cpf, cliente, customer_number, started_at, ended_at, duration_seconds, status, ended_reason, recording_url, stereo_recording_url, transcript, summary, custo_total, custo_stt, custo_tts, custo_vapi'
+        )
+        .or(orExpr)
+        .order('started_at', { ascending: false })
+        .limit(10000);
+
+      if (callRowsError) {
+        console.error('Error fetching acordo call recordings by URL:', callRowsError);
+        throw callRowsError;
+      }
+
+      (callRows || []).forEach((call: any) => {
+        const recordingUrl = normalizeUrl(call.recording_url);
+        const stereoRecordingUrl = normalizeUrl(call.stereo_recording_url);
+        if (recordingUrl) callsByRecordingUrl.set(recordingUrl, call);
+        if (stereoRecordingUrl) callsByRecordingUrl.set(stereoRecordingUrl, call);
+      });
+    }
+
+    const findMatchingCall = (agreement: any) => {
+      const recordingUrl = normalizeUrl(getAgreementRecordingUrl(agreement));
+      return recordingUrl ? callsByRecordingUrl.get(recordingUrl) || null : null;
+    };
+
+    const formalizadosByCampaignDate = new Map<
+      string,
+      {
+        count: number;
+        value: number;
+        recordings: NonNullable<AcordoKpi['acordo_recordings']>;
+        calls: NonNullable<AcordoKpi['acordo_calls']>;
+        agents: string[];
+      }
+    >();
+    const getGroup = (key: string) =>
+      formalizadosByCampaignDate.get(key) || { count: 0, value: 0, recordings: [], calls: [], agents: [] };
+    const upsertGroup = (
+      key: string,
+      patch: Partial<{
+        count: number;
+        value: number;
+        recordings: NonNullable<AcordoKpi['acordo_recordings']>;
+        calls: NonNullable<AcordoKpi['acordo_calls']>;
+        agents: string[];
+      }>
+    ) => {
+      const current = getGroup(key);
+      formalizadosByCampaignDate.set(key, {
+        count: patch.count ?? current.count,
+        value: patch.value ?? current.value,
+        recordings: patch.recordings ?? current.recordings,
+        calls: patch.calls ?? current.calls,
+        agents: patch.agents ?? current.agents
+      });
+    };
+
+    formalizadosRows.forEach((row: any) => {
       const referenceDate = row.created_at ? String(row.created_at).slice(0, 10) : '';
-      if (!campaignId || !referenceDate) return;
+      if (!referenceDate) return;
 
-      const key = `${campaignId}|${referenceDate}`;
-      const current = formalizadosByCampaignDate.get(key) || { count: 0, value: 0 };
+      const keys = buildKeys(row, referenceDate);
+      if (keys.length === 0) return;
+
+      const cpf = normalizeCpf(row.cpf);
+      const matchingCall = findMatchingCall(row);
+      const agenteResponsavel = getResponsibleAgent(row, matchingCall);
+      const recording = matchingCall
+        ? {
+            acordo_id: row.id,
+            call_id: matchingCall.id,
+            vapi_call_id: matchingCall.vapi_call_id,
+            assistant_id: matchingCall.assistant_id,
+            agente_responsavel: agenteResponsavel,
+            cpf,
+            nome: row.nome || matchingCall.cliente,
+            recording_url: matchingCall.recording_url,
+            stereo_recording_url: matchingCall.stereo_recording_url
+          }
+        : null;
+      const callDetail = matchingCall
+        ? {
+            acordo_id: row.id,
+            call_id: matchingCall.id,
+            vapi_call_id: matchingCall.vapi_call_id,
+            assistant_id: matchingCall.assistant_id,
+            agente_responsavel: agenteResponsavel,
+            cpf,
+            nome: row.nome || matchingCall.cliente,
+            telefone: matchingCall.customer_number,
+            campanha: matchingCall.campanha,
+            started_at: matchingCall.started_at,
+            ended_at: matchingCall.ended_at,
+            duration_seconds: Number(matchingCall.duration_seconds || 0),
+            status: matchingCall.status,
+            ended_reason: matchingCall.ended_reason,
+            recording_url: matchingCall.recording_url,
+            stereo_recording_url: matchingCall.stereo_recording_url,
+            transcript: matchingCall.transcript,
+            summary: matchingCall.summary,
+            custo_total: Number(matchingCall.custo_total || 0),
+            custo_stt: Number(matchingCall.custo_stt || 0),
+            custo_tts: Number(matchingCall.custo_tts || 0),
+            custo_vapi: Number(matchingCall.custo_vapi || 0)
+          }
+        : null;
       const value = Number(row.valor_recuperado || 0);
 
-      formalizadosByCampaignDate.set(key, {
-        count: current.count + 1,
-        value: current.value + (Number.isFinite(value) ? value : 0)
+      keys.forEach((key) => {
+        const current = getGroup(key);
+        upsertGroup(key, {
+          count: current.count + 1,
+          value: current.value + (Number.isFinite(value) ? value : 0),
+          recordings: recording ? [...current.recordings, recording] : current.recordings,
+          calls: callDetail ? [...current.calls, callDetail] : current.calls,
+          agents: agenteResponsavel ? [...current.agents, agenteResponsavel] : current.agents
+        });
+      });
+    });
+
+    productionAgreementCalls.forEach((matchingCall, index) => {
+      const referenceDate = getDateOnly(matchingCall.started_at);
+      if (!referenceDate) return;
+
+      const key = `${normalizeText(matchingCall.campanha)}|${referenceDate}`;
+      const current = getGroup(key);
+      if (current.count > 0) return;
+
+      const matchingRecordingUrl = normalizeUrl(matchingCall.recording_url);
+      const alreadyAdded = current.calls.some((call) => normalizeUrl(call.recording_url) === matchingRecordingUrl);
+      if (alreadyAdded) return;
+
+      const agenteResponsavel = getResponsibleAgent({}, matchingCall);
+      const cpf = normalizeCpf(matchingCall.cpf);
+      const callDetail = {
+        acordo_id: `producao-acordo-formalizado-${index}`,
+        call_id: matchingCall.id,
+        vapi_call_id: matchingCall.vapi_call_id,
+        assistant_id: matchingCall.assistant_id,
+        agente_responsavel: agenteResponsavel,
+        cpf,
+        nome: matchingCall.cliente,
+        telefone: matchingCall.customer_number,
+        campanha: matchingCall.campanha,
+        started_at: matchingCall.started_at,
+        ended_at: matchingCall.ended_at,
+        duration_seconds: Number(matchingCall.duration_seconds || 0),
+        status: matchingCall.status,
+        ended_reason: matchingCall.ended_reason,
+        recording_url: matchingCall.recording_url,
+        stereo_recording_url: matchingCall.stereo_recording_url,
+        transcript: matchingCall.transcript,
+        summary: matchingCall.summary,
+        custo_total: Number(matchingCall.custo_total || 0),
+        custo_stt: Number(matchingCall.custo_stt || 0),
+        custo_tts: Number(matchingCall.custo_tts || 0),
+        custo_vapi: Number(matchingCall.custo_vapi || 0)
+      };
+      const recording = {
+        acordo_id: callDetail.acordo_id,
+        call_id: matchingCall.id,
+        vapi_call_id: matchingCall.vapi_call_id,
+        assistant_id: matchingCall.assistant_id,
+        agente_responsavel: agenteResponsavel,
+        cpf,
+        nome: callDetail.nome,
+        recording_url: matchingCall.recording_url,
+        stereo_recording_url: matchingCall.stereo_recording_url
+      };
+
+      upsertGroup(key, {
+        recordings: [...current.recordings, recording],
+        calls: [...current.calls, callDetail],
+        agents: agenteResponsavel ? [...current.agents, agenteResponsavel] : current.agents
       });
     });
 
     return (kpis || []).map((row: any) => {
       const key = `${row.campaign_id}|${row.referencia_data}`;
-      const formalizado = formalizadosByCampaignDate.get(key) || { count: 0, value: 0 };
+      const fallbackKey = `${normalizeText(row.campanha_nome)}|${row.referencia_data}`;
+      const formalizado = formalizadosByCampaignDate.get(key) ||
+        formalizadosByCampaignDate.get(fallbackKey) ||
+        { count: 0, value: 0, recordings: [], calls: [], agents: [] };
+      const mergedCalls = formalizado.calls;
+      const mergedRecordings = formalizado.recordings;
+      const agentesResponsaveis = Array.from(
+        new Set(
+          [
+            ...formalizado.agents,
+            ...mergedCalls.map((call) => call.agente_responsavel || call.assistant_id)
+          ]
+            .filter((agent): agent is string => Boolean(agent))
+        )
+      ).sort((a, b) => a.localeCompare(b));
 
       return {
         ...row,
@@ -602,11 +989,19 @@ export const supabaseService = {
         cpr: Number(row.cpr || 0),
         call_failure_rate: Number(row.call_failure_rate || 0),
         taxa_engajamento: Number(row.taxa_engajamento || 0),
-        acordos_formalizados_count: formalizado.count,
-        valor_formalizado: formalizado.value
+        acordos_formalizados_count: formalizado.count || mergedCalls.length,
+        valor_formalizado: formalizado.value,
+        acordo_recordings: mergedRecordings,
+        acordo_calls: mergedCalls,
+        agentes_responsaveis: agentesResponsaveis,
+        recording_urls: mergedRecordings
+          .map((recording) => recording.recording_url)
+          .filter((url): url is string => Boolean(url))
       };
     });
   },
+
+  // --- QUALITY (Views) ---
 
   async getQualityMetrics(): Promise<any> {
     const { data, error } = await supabase
@@ -661,7 +1056,7 @@ export const supabaseService = {
     const { data, error } = await supabase
       .from('calls')
       .select('analysis, summary, ended_reason')
-      .eq('success_evaluation', false) // Only look at failed calls (objections)
+      .eq('success_evaluation', 'false') // Stored as text in the current schema
       .order('started_at', { ascending: false })
       .limit(200); // Analyze sample of last 200 calls
 
@@ -686,26 +1081,26 @@ export const supabaseService = {
       }
       // 2. Keyword Analysis on Summary (Heuristics)
       else if (summaryLower.includes('dinheiro') || summaryLower.includes('caro') || summaryLower.includes('financeir') || summaryLower.includes('custo') || summaryLower.includes('valor') || summaryLower.includes('pagar')) {
-        objection = "Preço / Condição Financeira";
+        objection = "PreÃ§o / CondiÃ§Ã£o Financeira";
       }
-      else if (summaryLower.includes('não tem interesse') || summaryLower.includes('desinteress') || summaryLower.includes('não quer') || summaryLower.includes('agradece') || summaryLower.includes('não precisa')) {
+      else if (summaryLower.includes('nÃ£o tem interesse') || summaryLower.includes('desinteress') || summaryLower.includes('nÃ£o quer') || summaryLower.includes('agradece') || summaryLower.includes('nÃ£o precisa')) {
         objection = "Sem Interesse";
       }
-      else if (summaryLower.includes('ocupado') || summaryLower.includes('ligar mais tarde') || summaryLower.includes('reunião') || summaryLower.includes('trabalha') || summaryLower.includes('ligue') || summaryLower.includes('momento') || summaryLower.includes('agendar')) {
+      else if (summaryLower.includes('ocupado') || summaryLower.includes('ligar mais tarde') || summaryLower.includes('reuniÃ£o') || summaryLower.includes('trabalha') || summaryLower.includes('ligue') || summaryLower.includes('momento') || summaryLower.includes('agendar')) {
         objection = "Ocupado / Agendar Retorno";
       }
-      else if (summaryLower.includes('já possui') || summaryLower.includes('já tem') || summaryLower.includes('concorrente') || summaryLower.includes('outro plano') || summaryLower.includes('já fiz') || summaryLower.includes('resolvi')) {
-        objection = "Já possui Solução/Concorrente";
+      else if (summaryLower.includes('jÃ¡ possui') || summaryLower.includes('jÃ¡ tem') || summaryLower.includes('concorrente') || summaryLower.includes('outro plano') || summaryLower.includes('jÃ¡ fiz') || summaryLower.includes('resolvi')) {
+        objection = "JÃ¡ possui SoluÃ§Ã£o/Concorrente";
       }
-      else if (summaryLower.includes('enganado') || summaryLower.includes('não é') || summaryLower.includes('erro') || summaryLower.includes('desconhece') || summaryLower.includes('não sou')) {
+      else if (summaryLower.includes('enganado') || summaryLower.includes('nÃ£o Ã©') || summaryLower.includes('erro') || summaryLower.includes('desconhece') || summaryLower.includes('nÃ£o sou')) {
         objection = "Contato Errado / Engano";
       }
       else if (reasonLower.includes('customer-ended')) {
         // Specific VAPI reason when user hangs up interaction
-        objection = "Desligou na Cara / Sem Interação";
+        objection = "Desligou na Cara / Sem InteraÃ§Ã£o";
       }
-      else if (summaryLower.includes('caixa postal') || summaryLower.includes('voicemail') || summaryLower.includes('recado') || summaryLower.includes('sinal') || summaryLower.includes('eletrônica')) {
-        objection = "Caixa Postal / Não Atendeu";
+      else if (summaryLower.includes('caixa postal') || summaryLower.includes('voicemail') || summaryLower.includes('recado') || summaryLower.includes('sinal') || summaryLower.includes('eletrÃ´nica')) {
+        objection = "Caixa Postal / NÃ£o Atendeu";
       }
       else if (call.summary && call.summary.length > 5 && call.summary.length < 50) {
         // Short summaries tend to be the objection itself
@@ -713,7 +1108,7 @@ export const supabaseService = {
       }
       else {
         // If we have a long summary but no keyword hit, and it wasn't a hangup, it's generic
-        objection = "Objeção Genérica (Diversos)";
+        objection = "ObjeÃ§Ã£o GenÃ©rica (Diversos)";
       }
 
       // Increment count
@@ -749,7 +1144,7 @@ export const supabaseService = {
 
       // 2. Sentiment Stats (Proxy: Success = Positive, Fail = Negative/Neutral)
       const { count: totalCalls } = await supabase.from('calls').select('*', { count: 'exact', head: true });
-      const { count: successCalls } = await supabase.from('calls').select('*', { count: 'exact', head: true }).eq('success_evaluation', true);
+      const { count: successCalls } = await supabase.from('calls').select('*', { count: 'exact', head: true }).eq('success_evaluation', 'true');
 
       const sentimentPositivePercent = totalCalls ? Math.round(((successCalls || 0) / totalCalls) * 100) : 0;
 
