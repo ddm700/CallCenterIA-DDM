@@ -43,7 +43,7 @@ export interface Contact {
   status: string; // db: status
   attempts: number; // db: tentativas
   lastAttempt?: string; // db: ultima_tentativa
-  phone: string; // from contact_phones or contacts
+  phone: string; // from contacts.telefone
 }
 
 export interface Call {
@@ -83,6 +83,31 @@ export interface Call {
   raw_success_evaluation?: string; // extracted from metadata_raw.analysis.successEvaluation
 }
 
+export interface AcordoCallDetail {
+  acordo_id: string;
+  call_id?: string;
+  vapi_call_id?: string;
+  assistant_id?: string;
+  agente_responsavel?: string;
+  cpf?: string;
+  nome?: string;
+  telefone?: string;
+  campanha?: string;
+  started_at?: string;
+  ended_at?: string;
+  duration_seconds?: number;
+  status?: string;
+  ended_reason?: string;
+  recording_url?: string;
+  stereo_recording_url?: string;
+  transcript?: string;
+  summary?: string;
+  custo_total?: number;
+  custo_stt?: number;
+  custo_tts?: number;
+  custo_vapi?: number;
+}
+
 export interface AcordoKpi {
   id: string;
   campaign_id: string;
@@ -109,6 +134,20 @@ export interface AcordoKpi {
   updated_at?: string;
   acordos_formalizados_count?: number;
   valor_formalizado?: number;
+  recording_urls?: string[];
+  acordo_recordings?: Array<{
+    acordo_id: string;
+    call_id?: string;
+    vapi_call_id?: string;
+    assistant_id?: string;
+    agente_responsavel?: string;
+    cpf?: string;
+    nome?: string;
+    recording_url?: string;
+    stereo_recording_url?: string;
+  }>;
+  acordo_calls?: AcordoCallDetail[];
+  agentes_responsaveis?: string[];
 }
 
 export interface Metric {

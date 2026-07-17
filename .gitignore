@@ -26,6 +26,7 @@ dist-ssr
 # Archive and temporary files
 .archive/
 cleanup.sh
+.chrome-headless/
 
 # Environment variables
 .env

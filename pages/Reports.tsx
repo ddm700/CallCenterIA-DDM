@@ -4,6 +4,18 @@ import { Phone, Target, Clock, DollarSign } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
 import { supabaseService } from '../services/supabaseService';
 
+const chartTooltipStyle = {
+  backgroundColor: '#0F172A',
+  borderColor: '#334155',
+  color: '#F8FAFC',
+  borderRadius: '4px',
+  fontSize: '12px'
+};
+
+const chartTooltipTextStyle = {
+  color: '#F8FAFC'
+};
+
 export const Reports: React.FC = () => {
   // State for all report data
   const [kpis, setKpis] = useState<any>({
@@ -140,7 +152,9 @@ export const Reports: React.FC = () => {
               <XAxis type="number" stroke="#64748B" fontSize={11} tickLine={false} axisLine={false} />
               <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 11, fill: '#94A3B8' }} stroke="none" />
               <Tooltip
-                contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', color: '#F8FAFC', borderRadius: '4px', fontSize: '12px' }}
+                contentStyle={chartTooltipStyle}
+                itemStyle={chartTooltipTextStyle}
+                labelStyle={chartTooltipTextStyle}
                 cursor={{ fill: '#334155', opacity: 0.2 }}
               />
               <Bar dataKey="value" fill="#F97316" radius={[0, 4, 4, 0]} barSize={32} />
@@ -170,7 +184,11 @@ export const Reports: React.FC = () => {
                   <Cell key={`cell-${index}`} fill={entry.color} />
                 ))}
               </Pie>
-              <Tooltip contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', color: '#F8FAFC', borderRadius: '4px', fontSize: '12px' }} />
+              <Tooltip
+                contentStyle={chartTooltipStyle}
+                itemStyle={chartTooltipTextStyle}
+                labelStyle={chartTooltipTextStyle}
+              />
               <Legend verticalAlign="middle" align="right" layout="vertical" iconType="circle" formatter={(value) => <span className="text-slate-600 dark:text-slate-400 text-xs font-medium ml-1">{value}</span>} />
             </PieChart>
           </ResponsiveContainer>
@@ -187,7 +205,11 @@ export const Reports: React.FC = () => {
               <CartesianGrid strokeDasharray="3 3" vertical={true} stroke="#334155" opacity={0.3} />
               <XAxis dataKey="day" stroke="#64748B" fontSize={11} tickLine={false} axisLine={false} />
               <YAxis stroke="#64748B" fontSize={11} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', color: '#F8FAFC', borderRadius: '4px', fontSize: '12px' }} />
+              <Tooltip
+                contentStyle={chartTooltipStyle}
+                itemStyle={chartTooltipTextStyle}
+                labelStyle={chartTooltipTextStyle}
+              />
               <Line type="monotone" dataKey="count" stroke="#F97316" strokeWidth={2} dot={{ r: 4, strokeWidth: 0, fill: '#F97316' }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>
@@ -204,7 +226,11 @@ export const Reports: React.FC = () => {
               <CartesianGrid strokeDasharray="3 3" vertical={true} stroke="#334155" opacity={0.3} />
               <XAxis dataKey="day" stroke="#64748B" fontSize={11} tickLine={false} axisLine={false} />
               <YAxis orientation="right" stroke="#64748B" fontSize={11} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', color: '#F8FAFC', borderRadius: '4px', fontSize: '12px' }} />
+              <Tooltip
+                contentStyle={chartTooltipStyle}
+                itemStyle={chartTooltipTextStyle}
+                labelStyle={chartTooltipTextStyle}
+              />
               <Line type="monotone" dataKey="cost" stroke="#22C55E" strokeWidth={2} dot={{ r: 4, strokeWidth: 0, fill: '#22C55E' }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>

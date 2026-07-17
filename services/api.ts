@@ -79,6 +79,7 @@ export const campaignService = {
       throw e;
     }
   },
+
   async callSingleContact(contact: Contact): Promise<void> {
     const msg = `Solicitando chamada individual para: ${contact.name}`;
     console.log(msg);
@@ -91,8 +92,7 @@ export const campaignService = {
         campaignId: contact.campaignId,
         customerNumber: contact.phone,
         customerName: contact.name,
-        customerCpf: contact.cpf,
-        phoneId: contact.contactId
+        customerCpf: contact.cpf
       };
 
       const data = await apiRequest<{ success: boolean; error?: string }>('/api/calls/initiate', {

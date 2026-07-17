@@ -4,6 +4,18 @@ import { Award, Star, ThumbsUp, AlertCircle, BrainCircuit, Target, MessageSquare
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { supabaseService } from '../services/supabaseService';
 
+const chartTooltipStyle = {
+   backgroundColor: '#0F172A',
+   borderColor: '#334155',
+   color: '#F8FAFC',
+   borderRadius: '4px',
+   fontSize: '12px'
+};
+
+const chartTooltipTextStyle = {
+   color: '#F8FAFC'
+};
+
 export const Quality: React.FC = () => {
    // State for all quality data
    const [metrics, setMetrics] = useState<any>({
@@ -136,7 +148,11 @@ export const Quality: React.FC = () => {
                               <Cell key={`cell-${index}`} fill={entry.color} />
                            ))}
                         </Pie>
-                        <Tooltip contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', color: '#F8FAFC', borderRadius: '4px', fontSize: '12px' }} />
+                        <Tooltip
+                           contentStyle={chartTooltipStyle}
+                           itemStyle={chartTooltipTextStyle}
+                           labelStyle={chartTooltipTextStyle}
+                        />
                      </PieChart>
                   </ResponsiveContainer>
                   <div className="flex flex-col justify-center gap-3 w-[40%]">
@@ -163,7 +179,11 @@ export const Quality: React.FC = () => {
                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" opacity={0.3} />
                      <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={60} tick={{ fontSize: 10, fill: '#64748B' }} stroke="none" />
                      <YAxis domain={[0, 100]} stroke="#64748B" fontSize={10} tickLine={false} axisLine={false} />
-                     <Tooltip contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', color: '#F8FAFC', borderRadius: '4px', fontSize: '12px' }} />
+                     <Tooltip
+                        contentStyle={chartTooltipStyle}
+                        itemStyle={chartTooltipTextStyle}
+                        labelStyle={chartTooltipTextStyle}
+                     />
                      <Bar dataKey="score" fill="#F97316" radius={[4, 4, 0, 0]} barSize={32} />
                   </BarChart>
                </ResponsiveContainer>
@@ -234,7 +254,7 @@ export const Quality: React.FC = () => {
                      ))
                   ) : (
                      <div className="flex flex-col items-center justify-center h-32 text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                        <p className="text-sm">Aguardando dados...</p>
+                        <p className="text-sm">Nenhuma objeção classificada encontrada.</p>
                      </div>
                   )}
                </div>
@@ -255,7 +275,7 @@ export const Quality: React.FC = () => {
                      </>
                   ) : (
                      <div className="text-center py-4 text-slate-500 opacity-70">
-                        <p>Aguardando nova chamada...</p>
+                        <p>Nenhuma transcrição recente disponível.</p>
                      </div>
                   )}
                </div>

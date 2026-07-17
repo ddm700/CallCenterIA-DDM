@@ -9,9 +9,12 @@ const technicalFailures = [
   'no-answer',
   'busy'
 ];
-const successfulEndings = ['customer-ended-call', 'assistant-ended-call', 'Sem Debito', 'Sem Debito'];
+const successfulEndings = ['customer-ended-call', 'assistant-ended-call', 'Sem Débito', 'Sem DÃ©bito'];
 const completedEndings = ['assistant-ended-call', 'customer-ended-call'];
 const MIN_DURATION_FOR_SUCCESS = 15;
+const FORMALIZATION_AGREEMENT_WEBHOOK_URL =
+  process.env.N8N_FORMALIZACAO_ACORDO_WEBHOOK_URL ||
+  'https://n8n-n8n-start.xzz0ed.easypanel.host/webhook/acordo_formalizado';
 
 export const webhooksRouter = Router();
 
@@ -49,40 +52,119 @@ function firstNonEmpty(...values: unknown[]): string | null {
   return null;
 }
 
-function getRecordingUrls(payload: any, call: any) {
-  const payloadArtifact = isObject(payload?.artifact) ? payload.artifact : {};
-  const callArtifact = isObject(call?.artifact) ? call.artifact : {};
+function getCostAmount(cost: any): number {
+  const amount = Number(cost?.amount ?? cost?.cost ?? 0);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function getCostItems(payload: any, call: any): any[] {
+  if (Array.isArray(payload?.costs)) return payload.costs;
+  if (Array.isArray(call?.costs)) return call.costs;
+  if (Array.isArray(payload?.costBreakdown)) return payload.costBreakdown;
+  if (Array.isArray(call?.costBreakdown)) return call.costBreakdown;
+  return [];
+}
+
+function getCallCosts(payload: any, call: any) {
+  const costs = getCostItems(payload, call);
+  const custo_stt = costs
+    .filter((c: any) => ['stt', 'transcription', 'transcriber'].includes(String(c?.type || '').toLowerCase()))
+    .reduce((sum: number, cost: any) => sum + getCostAmount(cost), 0);
+  const custo_tts = costs
+    .filter((c: any) => ['tts', 'voice'].includes(String(c?.type || '').toLowerCase()))
+    .reduce((sum: number, cost: any) => sum + getCostAmount(cost), 0);
+  const custo_vapi = costs
+    .filter((c: any) => ['vapi', 'service'].includes(String(c?.type || '').toLowerCase()))
+    .reduce((sum: number, cost: any) => sum + getCostAmount(cost), 0);
+  const itemTotal = costs.reduce((sum: number, cost: any) => sum + getCostAmount(cost), 0);
+  const custo_total = itemTotal || Number(payload?.cost ?? call?.cost ?? call?.custo_total ?? 0) || 0;
+
+  return { custo_total, custo_stt, custo_tts, custo_vapi };
+}
+
+function buildFormalizationPayload(payload: any, call: any, metadataFromCall: Record<string, any>, callDbId: string) {
+  const assistantVariableValues = {
+    ...(isObject(call?.assistantOverrides?.variableValues) ? call.assistantOverrides.variableValues : {}),
+    ...(isObject(payload?.assistantOverrides?.variableValues) ? payload.assistantOverrides.variableValues : {})
+  };
+
+  const cpf = firstNonEmpty(
+    metadataFromCall.cpf,
+    metadataFromCall.Valorcpf,
+    metadataFromCall.valorcpf,
+    assistantVariableValues.Valorcpf,
+    assistantVariableValues.cpf
+  );
+
+  const artifact = isObject(call?.artifact) ? call.artifact : {};
+  const artifactVariables = {
+    ...(isObject(artifact.variables) ? artifact.variables : {}),
+    ...assistantVariableValues,
+    ...(cpf ? { Valorcpf: cpf } : {})
+  };
 
   return {
-    recordingUrl: firstNonEmpty(
-      payloadArtifact.recording?.mono?.combinedUrl,
-      callArtifact.recording?.mono?.combinedUrl,
-      payloadArtifact.recordingUrl,
-      callArtifact.recordingUrl,
-      payload.recordingUrl,
-      call.recordingUrl,
-      payload.recording_url,
-      call.recording_url,
-      payloadArtifact.recording?.url,
-      callArtifact.recording?.url
-    ),
-    stereoRecordingUrl: firstNonEmpty(
-      payloadArtifact.recording?.stereoUrl,
-      callArtifact.recording?.stereoUrl,
-      payloadArtifact.stereoRecordingUrl,
-      callArtifact.stereoRecordingUrl,
-      payload.stereoRecordingUrl,
-      call.stereoRecordingUrl,
-      payload.stereo_recording_url,
-      call.stereo_recording_url
-    ),
-    artifactLogUrl: firstNonEmpty(
-      payloadArtifact.logUrl,
-      callArtifact.logUrl,
-      payloadArtifact.artifactLogUrl,
-      callArtifact.artifactLogUrl
-    )
+    type: 'end-of-call-report',
+    table: 'calls',
+    record: {
+      id: callDbId,
+      vapi_call_id: call?.id || null,
+      cliente: firstNonEmpty(call?.customer?.name, metadataFromCall.customerName, metadataFromCall.nome),
+      cpf,
+      customer_number: firstNonEmpty(call?.customer?.number, metadataFromCall.customerNumber, metadataFromCall.telefone),
+      started_at: call?.startedAt || null,
+      ended_at: call?.endedAt || null,
+      status: firstNonEmpty(call?.status, 'ended'),
+      ended_reason: call?.endedReason || null,
+      summary: firstNonEmpty(call?.analysis?.summary, call?.summary),
+      transcript: firstNonEmpty(call?.artifact?.transcript, call?.transcript),
+      metadata_raw: {
+        ...payload,
+        call,
+        metadata: metadataFromCall,
+        artifact: {
+          ...artifact,
+          variables: artifactVariables
+        }
+      }
+    }
   };
+}
+
+async function postFormalizationAgreementWebhook(
+  payload: any,
+  call: any,
+  metadataFromCall: Record<string, any>,
+  callDbId: string
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const response = await fetch(FORMALIZATION_AGREEMENT_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-source': 'callcenteria-backend',
+        'x-event-type': 'end-of-call-report'
+      },
+      body: JSON.stringify(buildFormalizationPayload(payload, call, metadataFromCall, callDbId)),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const responseBody = await response.text().catch(() => '');
+      console.error('[webhooks/vapi/callback] formalization webhook error', {
+        status: response.status,
+        statusText: response.statusText,
+        responseBody
+      });
+    }
+  } catch (error) {
+    console.error('[webhooks/vapi/callback] formalization webhook failed', error);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 webhooksRouter.post('/vapi/callback', async (req, res) => {
@@ -133,7 +215,8 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
         .select('id, campaign_contact_id')
         .eq('campaign_contact_id', campaignContactIdFromMetadata)
         .is('vapi_call_id', null)
-        .eq('status', 'queued')
+        .is('started_at', null)
+        .is('metadata_raw', null)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -193,13 +276,7 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
       ? Math.max(0, Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000))
       : Number(call.durationSeconds ?? call.duration_seconds ?? call.duration ?? 0) || 0;
 
-    const costs = call.costs || [];
-    const custo_stt = costs.find((c: any) => c.type === 'stt' || c.type === 'transcription')?.amount || 0;
-    const custo_tts = costs.find((c: any) => c.type === 'tts' || c.type === 'voice')?.amount || 0;
-    const custo_vapi = costs.find((c: any) => c.type === 'vapi' || c.type === 'service')?.amount || 0;
-    const custo_total = costs.length > 0
-      ? costs.reduce((sum: number, cost: any) => sum + (cost.amount || 0), 0)
-      : Number(call.cost ?? call.custo_total ?? 0) || 0;
+    const { custo_total, custo_stt, custo_tts, custo_vapi } = getCallCosts(payload, call);
 
     const structuredData = call.analysis?.structuredData || {};
     let successEvaluation: string | null = null;
@@ -211,8 +288,6 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
             : 'false'
           : String(call.analysis.successEvaluation);
     }
-
-    const recordingUrls = getRecordingUrls(payload, call);
 
     const updateData = {
       vapi_call_id: callId,
@@ -229,9 +304,9 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
       summary: firstNonEmpty(call.analysis?.summary, call.summary, payload.summary),
       success_evaluation: successEvaluation,
       transcript: firstNonEmpty(call.artifact?.transcript, call.transcript, payload.transcript),
-      recording_url: recordingUrls.recordingUrl,
-      stereo_recording_url: recordingUrls.stereoRecordingUrl,
-      artifact_log_url: recordingUrls.artifactLogUrl,
+      recording_url: firstNonEmpty(call.artifact?.recording?.url, call.recordingUrl, call.recording_url),
+      stereo_recording_url: firstNonEmpty(call.artifact?.recording?.stereoRecordingUrl, call.stereoRecordingUrl, call.stereo_recording_url),
+      artifact_log_url: call.artifact?.artifactLogUrl || null,
       assistant_id: call.assistantId || null,
       phone_number_id: call.phoneNumberId || null,
       structured_name: structuredData.name || null,
@@ -241,17 +316,14 @@ webhooksRouter.post('/vapi/callback', async (req, res) => {
       structured_main_points: structuredData.mainPoints || null,
       structured_next_steps: structuredData.nextSteps || null,
       structured_emotions_objections: structuredData.emotionsObjections || null,
+      metadata_raw: payload,
       status: statusValue
     };
 
-    const { error: metadataUpdateError } = await supabaseAdmin
-      .from('calls')
-      .update({ metadata_raw: payload })
-      .eq('id', existingCall.id);
-    if (metadataUpdateError) throw new Error(`Erro ao atualizar metadata da chamada: ${metadataUpdateError.message}`);
-
     const { error: updateError } = await supabaseAdmin.from('calls').update(updateData).eq('id', existingCall.id);
     if (updateError) throw new Error(`Erro ao atualizar chamada: ${updateError.message}`);
+
+    await postFormalizationAgreementWebhook(payload, call, metadataFromCall, existingCall.id);
 
     const campaignContactId = existingCall.campaign_contact_id || campaignContactIdFromMetadata;
     if (campaignContactId) {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Modal, Input } from '../components/ui';
-import { Play, Pause, Trash2, Edit, Plus, Phone, Users, Clock, RefreshCw, Loader2, TrendingUp } from 'lucide-react';
+import { Play, Pause, Edit, Plus, Phone, Users, Clock, RefreshCw, Loader2, TrendingUp } from 'lucide-react';
 import { Campaign, VapiAssistant, VapiPhoneNumber } from '../types';
 import { supabaseService } from '../services/supabaseService';
 import { vapiService } from '../services/vapiService';
@@ -50,7 +50,8 @@ export const Campaigns: React.FC = () => {
       setCampaigns(data);
     } catch (error) {
       console.error(error);
-      alert('Erro ao buscar campanhas no banco de dados.');
+      const message = error instanceof Error ? error.message : 'Erro ao buscar campanhas no banco de dados.';
+      alert(message);
     } finally {
       setLoading(false);
     }
@@ -60,22 +61,15 @@ export const Campaigns: React.FC = () => {
     setLoadingVapi(true);
     setVapiError(null);
     try {
-      const resources = await vapiService.getResources();
-      setAssistants(resources.assistants);
-      setPhoneNumbers(resources.phoneNumbers);
-
-      if (resources.assistants.length === 0 || resources.phoneNumbers.length === 0) {
-        const missingResources: string[] = [];
-        if (resources.phoneNumbers.length === 0) missingResources.push('linhas');
-        if (resources.assistants.length === 0) missingResources.push('assistentes');
-
-        setVapiError(`Nenhum recurso VAPI encontrado para: ${missingResources.join(' e ')}.`);
-      }
-    } catch (error: any) {
+      const data = await vapiService.getResources();
+      setAssistants(Array.isArray(data.assistants) ? data.assistants : []);
+      setPhoneNumbers(Array.isArray(data.phoneNumbers) ? data.phoneNumbers : []);
+    } catch (error) {
       console.error(error);
+      const message = error instanceof Error ? error.message : 'Erro ao carregar recursos VAPI.';
       setAssistants([]);
       setPhoneNumbers([]);
-      setVapiError(error?.message || 'Erro ao carregar recursos da VAPI.');
+      setVapiError(message);
     } finally {
       setLoadingVapi(false);
     }
@@ -116,7 +110,6 @@ export const Campaigns: React.FC = () => {
       endTime: campaign.endTime,
       startActive: campaign.active
     });
-    setVapiError(null);
     setIsModalOpen(true);
   };
 
@@ -145,8 +138,19 @@ export const Campaigns: React.FC = () => {
 
     setExecutingId(campaign.id);
     try {
-      await campaignService.startCampaign(campaign.id, campaign.name);
-      alert(`Sucesso! O comando foi enviado para o n8n.`);
+      const summary = await campaignService.startCampaign(campaign.id, campaign.name);
+      if (summary.completed === true) {
+        alert(
+          `Campanha processada.\nAceitos pelo backend/n8n: ${summary.successful || 0}\nFalhas: ${summary.failed || 0}`
+        );
+      } else if (typeof summary.remainingPending === 'number') {
+        alert(
+          `Processamento parcial.\nProcessados: ${summary.totalProcessed || 0}\nPendentes: ${summary.remainingPending}`
+        );
+      } else {
+        alert('Sucesso! O backend iniciou a campanha em background. A tela pode ser usada normalmente enquanto os disparos continuam.');
+      }
+      fetchCampaigns();
     } catch (error: any) {
       console.error("Erro na execução:", error);
       alert(`Erro ao executar: ${error.message}\nVerifique os Logs do Sistema para mais detalhes.`);
@@ -191,9 +195,8 @@ export const Campaigns: React.FC = () => {
       setIsModalOpen(false);
       fetchCampaigns(); // Refresh list
 
-    } catch (error: any) {
-      console.error('Erro ao salvar campanha:', error);
-      alert(error?.message || 'Erro ao salvar campanha');
+    } catch (error) {
+      alert('Erro ao salvar campanha');
     } finally {
       setSaving(false);
     }
@@ -361,13 +364,6 @@ export const Campaigns: React.FC = () => {
                         >
                           <Edit className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          type="button"
-                          className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md text-slate-400 hover:text-red-500 transition-colors btn-click"
-                          title="Excluir"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -428,13 +424,7 @@ export const Campaigns: React.FC = () => {
                   onChange={(e) => setFormData({ ...formData, vapiPhoneId: e.target.value })}
                   disabled={loadingVapi}
                 >
-                  <option value="">
-                    {loadingVapi
-                      ? 'Carregando...'
-                      : phoneNumbers.length === 0
-                        ? 'Nenhuma linha encontrada'
-                        : 'Selecione uma linha...'}
-                  </option>
+                  <option value="">{loadingVapi ? 'Carregando...' : 'Selecione uma linha...'}</option>
                   {phoneNumbers.map(phone => (
                     <option key={phone.id} value={phone.id}>
                       {phone.number} {phone.name ? `(${phone.name})` : ''}
@@ -454,24 +444,19 @@ export const Campaigns: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, vapiAssistantId: e.target.value })}
                 disabled={loadingVapi}
               >
-                <option value="">
-                  {loadingVapi
-                    ? 'Carregando...'
-                    : assistants.length === 0
-                      ? 'Nenhum assistente encontrado'
-                      : 'Selecione um assistente...'}
-                </option>
+                <option value="">{loadingVapi ? 'Carregando...' : 'Selecione um assistente...'}</option>
                 {assistants.map(assistant => (
                   <option key={assistant.id} value={assistant.id}>
                     {assistant.name || assistant.model?.model || 'Assistente sem nome'} ({assistant.id.slice(0, 5)}...)
                   </option>
                 ))}
               </select>
-              {vapiError && (
-                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-                  {vapiError} Verifique a chave VAPI em Configurações e se a API `/api/vapi/resources` está respondendo.
-                </p>
-              )}
+            </div>
+          )}
+
+          {formData.type === 'VAPI' && vapiError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+              {vapiError}
             </div>
           )}
 

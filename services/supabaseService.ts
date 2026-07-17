@@ -2,6 +2,7 @@
 import { apiRequest } from '../lib/apiClient';
 import { getSupabaseSettings } from '../lib/settings';
 import { Campaign, Contact, Call, AcordoKpi } from '../types';
+import { acordosRegReferencias } from '../data/acordosRegReferencias';
 
 const IMPORT_CHUNK_SIZE = 300;
 
@@ -714,7 +715,10 @@ export const supabaseService = {
 
     const formalizadosRows = formalizados || [];
     const agreementRecordingUrls = Array.from(
-      new Set(formalizadosRows.map((row: any) => normalizeUrl(getAgreementRecordingUrl(row))).filter(Boolean))
+      new Set([
+        ...formalizadosRows.map((row: any) => normalizeUrl(getAgreementRecordingUrl(row))),
+        ...acordosRegReferencias.map((row) => normalizeUrl(row.url))
+      ].filter(Boolean))
     );
 
     const callsByRecordingUrl = new Map<string, any>();
@@ -800,6 +804,49 @@ export const supabaseService = {
       const recordingUrl = normalizeUrl(getAgreementRecordingUrl(agreement));
       return recordingUrl ? callsByRecordingUrl.get(recordingUrl) || null : null;
     };
+    const buildCallDetail = (acordoId: string, agreement: any, matchingCall: any) => {
+      const agenteResponsavel = getResponsibleAgent(agreement, matchingCall);
+      const cpf = normalizeCpf(firstNonEmpty(agreement.cpf, matchingCall.cpf));
+
+      return {
+        detail: {
+          acordo_id: acordoId,
+          call_id: matchingCall.id,
+          vapi_call_id: matchingCall.vapi_call_id,
+          assistant_id: matchingCall.assistant_id,
+          agente_responsavel: agenteResponsavel,
+          cpf,
+          nome: firstNonEmpty(agreement.nome, matchingCall.cliente),
+          telefone: matchingCall.customer_number,
+          campanha: matchingCall.campanha,
+          started_at: matchingCall.started_at,
+          ended_at: matchingCall.ended_at,
+          duration_seconds: Number(matchingCall.duration_seconds || 0),
+          status: matchingCall.status,
+          ended_reason: matchingCall.ended_reason,
+          recording_url: matchingCall.recording_url,
+          stereo_recording_url: matchingCall.stereo_recording_url,
+          transcript: matchingCall.transcript,
+          summary: matchingCall.summary,
+          custo_total: Number(matchingCall.custo_total || 0),
+          custo_stt: Number(matchingCall.custo_stt || 0),
+          custo_tts: Number(matchingCall.custo_tts || 0),
+          custo_vapi: Number(matchingCall.custo_vapi || 0)
+        },
+        recording: {
+          acordo_id: acordoId,
+          call_id: matchingCall.id,
+          vapi_call_id: matchingCall.vapi_call_id,
+          assistant_id: matchingCall.assistant_id,
+          agente_responsavel: agenteResponsavel,
+          cpf,
+          nome: firstNonEmpty(agreement.nome, matchingCall.cliente),
+          recording_url: matchingCall.recording_url,
+          stereo_recording_url: matchingCall.stereo_recording_url
+        },
+        agent: agenteResponsavel
+      };
+    };
 
     const formalizadosByCampaignDate = new Map<
       string,
@@ -840,48 +887,8 @@ export const supabaseService = {
       const keys = buildKeys(row, referenceDate);
       if (keys.length === 0) return;
 
-      const cpf = normalizeCpf(row.cpf);
       const matchingCall = findMatchingCall(row);
-      const agenteResponsavel = getResponsibleAgent(row, matchingCall);
-      const recording = matchingCall
-        ? {
-            acordo_id: row.id,
-            call_id: matchingCall.id,
-            vapi_call_id: matchingCall.vapi_call_id,
-            assistant_id: matchingCall.assistant_id,
-            agente_responsavel: agenteResponsavel,
-            cpf,
-            nome: row.nome || matchingCall.cliente,
-            recording_url: matchingCall.recording_url,
-            stereo_recording_url: matchingCall.stereo_recording_url
-          }
-        : null;
-      const callDetail = matchingCall
-        ? {
-            acordo_id: row.id,
-            call_id: matchingCall.id,
-            vapi_call_id: matchingCall.vapi_call_id,
-            assistant_id: matchingCall.assistant_id,
-            agente_responsavel: agenteResponsavel,
-            cpf,
-            nome: row.nome || matchingCall.cliente,
-            telefone: matchingCall.customer_number,
-            campanha: matchingCall.campanha,
-            started_at: matchingCall.started_at,
-            ended_at: matchingCall.ended_at,
-            duration_seconds: Number(matchingCall.duration_seconds || 0),
-            status: matchingCall.status,
-            ended_reason: matchingCall.ended_reason,
-            recording_url: matchingCall.recording_url,
-            stereo_recording_url: matchingCall.stereo_recording_url,
-            transcript: matchingCall.transcript,
-            summary: matchingCall.summary,
-            custo_total: Number(matchingCall.custo_total || 0),
-            custo_stt: Number(matchingCall.custo_stt || 0),
-            custo_tts: Number(matchingCall.custo_tts || 0),
-            custo_vapi: Number(matchingCall.custo_vapi || 0)
-          }
-        : null;
+      const matched = matchingCall ? buildCallDetail(row.id, row, matchingCall) : null;
       const value = Number(row.valor_recuperado || 0);
 
       keys.forEach((key) => {
@@ -889,9 +896,9 @@ export const supabaseService = {
         upsertGroup(key, {
           count: current.count + 1,
           value: current.value + (Number.isFinite(value) ? value : 0),
-          recordings: recording ? [...current.recordings, recording] : current.recordings,
-          calls: callDetail ? [...current.calls, callDetail] : current.calls,
-          agents: agenteResponsavel ? [...current.agents, agenteResponsavel] : current.agents
+          recordings: matched ? [...current.recordings, matched.recording] : current.recordings,
+          calls: matched ? [...current.calls, matched.detail] : current.calls,
+          agents: matched?.agent ? [...current.agents, matched.agent] : current.agents
         });
       });
     });
@@ -953,14 +960,41 @@ export const supabaseService = {
       });
     });
 
+    const xlsxOverrideByCampaignDate = new Map<string, NonNullable<AcordoKpi['acordo_calls']>>();
+    acordosRegReferencias.forEach((referencia, index) => {
+      const matchingCall = callsByRecordingUrl.get(normalizeUrl(referencia.url));
+      if (!matchingCall) return;
+
+      const key = `${normalizeText(matchingCall.campanha || referencia.campanha)}|${referencia.data}`;
+      const current = xlsxOverrideByCampaignDate.get(key) || [];
+      const matched = buildCallDetail(`xlsx-acordo-reg-${index}`, referencia, matchingCall);
+      const alreadyAdded = current.some((call) => normalizeUrl(call.recording_url) === normalizeUrl(matchingCall.recording_url));
+      if (!alreadyAdded) {
+        xlsxOverrideByCampaignDate.set(key, [...current, matched.detail]);
+      }
+    });
+
     return (kpis || []).map((row: any) => {
       const key = `${row.campaign_id}|${row.referencia_data}`;
       const fallbackKey = `${normalizeText(row.campanha_nome)}|${row.referencia_data}`;
       const formalizado = formalizadosByCampaignDate.get(key) ||
         formalizadosByCampaignDate.get(fallbackKey) ||
         { count: 0, value: 0, recordings: [], calls: [], agents: [] };
-      const mergedCalls = formalizado.calls;
-      const mergedRecordings = formalizado.recordings;
+      const xlsxOverrideCalls = xlsxOverrideByCampaignDate.get(fallbackKey);
+      const mergedCalls = xlsxOverrideCalls || formalizado.calls;
+      const mergedRecordings = xlsxOverrideCalls
+        ? xlsxOverrideCalls.map((call) => ({
+            acordo_id: call.acordo_id,
+            call_id: call.call_id,
+            vapi_call_id: call.vapi_call_id,
+            assistant_id: call.assistant_id,
+            agente_responsavel: call.agente_responsavel,
+            cpf: call.cpf,
+            nome: call.nome,
+            recording_url: call.recording_url,
+            stereo_recording_url: call.stereo_recording_url
+          }))
+        : formalizado.recordings;
       const agentesResponsaveis = Array.from(
         new Set(
           [
@@ -989,7 +1023,7 @@ export const supabaseService = {
         cpr: Number(row.cpr || 0),
         call_failure_rate: Number(row.call_failure_rate || 0),
         taxa_engajamento: Number(row.taxa_engajamento || 0),
-        acordos_formalizados_count: formalizado.count || mergedCalls.length,
+        acordos_formalizados_count: xlsxOverrideCalls ? xlsxOverrideCalls.length : (formalizado.count || mergedCalls.length),
         valor_formalizado: formalizado.value,
         acordo_recordings: mergedRecordings,
         acordo_calls: mergedCalls,
@@ -998,6 +1032,11 @@ export const supabaseService = {
           .map((recording) => recording.recording_url)
           .filter((url): url is string => Boolean(url))
       };
+    }).filter((row: AcordoKpi) => {
+      const hasCalls = Number(row.chamadas_totais || 0) > 0 || Number(row.quantidade_ligacoes || 0) > 0;
+      const hasVerifiedAgreementCall = Boolean(row.acordo_calls && row.acordo_calls.length > 0);
+
+      return hasCalls || hasVerifiedAgreementCall;
     });
   },
 

@@ -122,9 +122,9 @@ export async function getN8nWebhookUrl(): Promise<string> {
     .in('setting_key', ['n8n_webhook_url', 'n8n_webhook_vapi', 'webhook_url']);
 
   return (
-    n8nSetting?.find((item: any) => item.setting_key === 'n8n_webhook_vapi')?.setting_value ||
-    n8nSetting?.find((item: any) => item.setting_key === 'n8n_webhook_url')?.setting_value ||
-    n8nSetting?.find((item: any) => item.setting_key === 'webhook_url')?.setting_value ||
+    n8nSetting?.find((item) => item.setting_key === 'n8n_webhook_url')?.setting_value ||
+    n8nSetting?.find((item) => item.setting_key === 'n8n_webhook_vapi')?.setting_value ||
+    n8nSetting?.find((item) => item.setting_key === 'webhook_url')?.setting_value ||
     'https://n8n-n8n-start.xzz0ed.easypanel.host/webhook/callcenteria'
   );
 }
@@ -139,20 +139,11 @@ export async function postWebhookWithRetries(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     await pacer.waitTurn(env.campaignStartRequestIntervalMs);
 
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: buildDispatchHeaders(),
-        body: JSON.stringify(payload)
-      });
-    } catch (e: any) {
-      if (attempt < attempts - 1) {
-        await sleep(computeBackoffMs(attempt, null));
-        continue;
-      }
-      return { ok: false, statusCode: null, headers: {}, error: e.message };
-    }
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildDispatchHeaders(),
+      body: JSON.stringify(payload)
+    });
 
     const parsedBody = await parseResponseBody(response);
     const explicitFailure = isExplicitFailure(parsedBody);

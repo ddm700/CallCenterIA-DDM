@@ -9,9 +9,11 @@
     "dev": "npm run build && node dist/server.js",
     "predev:watch": "npm run ensure-env",
     "dev:watch": "tsx watch src/server.ts",
+    "dev:call-dispatch-worker": "tsx watch src/queues/callDispatchWorker.ts",
     "build": "tsc -p tsconfig.json",
     "prestart": "npm run ensure-env",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "start:call-dispatch-worker": "node dist/queues/callDispatchWorker.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.80.0",
@@ -22,9 +24,11 @@
     "ioredis": "^5.8.1"
   },
   "devDependencies": {
+    "@types/amqplib": "^0.10.8",
     "@types/cors": "^2.8.19",
     "@types/express": "^4.17.23",
     "@types/node": "^22.14.0",
+    "amqplib": "^1.0.3",
     "tsx": "^4.20.6",
     "typescript": "^5.8.2"
   }

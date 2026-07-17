@@ -83,7 +83,7 @@ export const env = {
   rabbitmqPrefetch: Math.max(1, nonNegativeInt('RABBITMQ_PREFETCH', 6)),
   campaignStartMaxConcurrency: Math.max(1, nonNegativeInt('CAMPAIGN_START_MAX_CONCURRENCY', 6)),
   campaignStartBatchSize: Math.max(1, nonNegativeInt('CAMPAIGN_START_BATCH_SIZE', 500)),
-  campaignStartServerlessBatchSize: Math.max(1, nonNegativeInt('CAMPAIGN_START_SERVERLESS_BATCH_SIZE', 100)),
+  campaignStartServerlessBatchSize: Math.max(1, nonNegativeInt('CAMPAIGN_START_SERVERLESS_BATCH_SIZE', 500)),
   campaignStartPauseMs: nonNegativeInt('CAMPAIGN_START_PAUSE_MS', 90000),
   campaignStartRequestIntervalMs: nonNegativeInt('CAMPAIGN_START_REQUEST_INTERVAL_MS', 250),
   campaignStartMaxRetries: nonNegativeInt('CAMPAIGN_START_MAX_RETRIES', 5),

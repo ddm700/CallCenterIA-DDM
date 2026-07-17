@@ -5,9 +5,15 @@ export const APP_SETTINGS_KEYS = {
   VAPI: 'app_settings_vapi',
 };
 
+declare const __APP_ENV__: Record<string, string> | undefined;
+
 // Helper to safely get env vars
 const getEnv = (key: string) => {
   try {
+    if (typeof __APP_ENV__ !== 'undefined' && __APP_ENV__?.[key]) {
+      return __APP_ENV__[key];
+    }
+
     // @ts-ignore
     return (import.meta && import.meta.env && import.meta.env[key]) || '';
   } catch (e) {
@@ -37,7 +43,11 @@ export const getSupabaseSettings = (): SupabaseSettings => {
   const stored = localStorage.getItem(APP_SETTINGS_KEYS.SUPABASE);
   if (stored) {
     try {
-      return JSON.parse(stored);
+      const parsed = JSON.parse(stored);
+      // Ignore stale/empty localStorage settings and fallback to env values.
+      if (parsed?.url && parsed?.key) {
+        return parsed;
+      }
     } catch (e) {
       console.error('Failed to parse stored Supabase settings', e);
     }

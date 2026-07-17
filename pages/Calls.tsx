@@ -33,12 +33,8 @@ export const Calls: React.FC = () => {
   const fetchCalls = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
     try {
-      const [callsData, campaignsData] = await Promise.all([
-        supabaseService.getCalls(),
-        supabaseService.getCampaigns()
-      ]);
+      const callsData = await supabaseService.getCalls();
       setCalls(callsData);
-      setAllCampaignNames(campaignsData.map(c => c.name));
     } catch (error) {
       console.error(error);
     } finally {
@@ -46,8 +42,18 @@ export const Calls: React.FC = () => {
     }
   }, []);
 
+  const fetchCampaigns = async () => {
+    try {
+      const campaignsData = await supabaseService.getCampaigns();
+      setAllCampaignNames(campaignsData.map(c => c.name));
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   useEffect(() => {
     fetchCalls();
+    fetchCampaigns();
   }, [fetchCalls]);
 
   useEffect(() => {
@@ -157,7 +163,7 @@ export const Calls: React.FC = () => {
     return r.includes('voicemail') || r.includes('answering') || r.includes('machine') || r.includes('caixa') || r.includes('postal');
   };
 
-  const completedCalls = calls.filter(c => c.status === 'Concluída' || c.status === 'completed');
+  const completedCalls = calls.filter(c => c.status === 'Concluída' || c.status == 'completed');
   const answeredCalls = completedCalls.filter(c => !isVoicemail(c.reason));
   const voicemailCalls = calls.filter(c => isVoicemail(c.reason));
 
@@ -165,9 +171,23 @@ export const Calls: React.FC = () => {
   const kpiVoicemailRate = calls.length > 0 ? Math.round((voicemailCalls.length / calls.length) * 100) : 0;
 
 
-  const handleOpenDetails = (call: Call) => {
+  const handleOpenDetails = async (call: Call) => {
     setSelectedCall(call);
     setIsModalOpen(true);
+
+    try {
+      const freshCall = await supabaseService.getCall(call.id);
+      setSelectedCall({
+        ...call,
+        ...freshCall,
+        campaignName: freshCall.campaignName === 'Direta' ? call.campaignName : freshCall.campaignName,
+        clientName: freshCall.clientName === 'Desconhecido' ? call.clientName : freshCall.clientName,
+        cpf: freshCall.cpf === '-' ? call.cpf : freshCall.cpf,
+        phone: freshCall.phone === '-' ? call.phone : freshCall.phone
+      });
+    } catch (error) {
+      console.error('Erro ao buscar detalhes atualizados da ligacao:', error);
+    }
   };
 
   return (

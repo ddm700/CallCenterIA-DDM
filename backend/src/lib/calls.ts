@@ -7,6 +7,7 @@ const BACKEND_PUBLIC_URL_SETTING_KEYS = [
   'public_base_url',
   'public_url'
 ] as const;
+const QUEUED_REUSE_WINDOW_MS = 30 * 60 * 1000;
 
 interface QueuedCallInput {
   campaignContactId?: string | null;
@@ -61,7 +62,7 @@ export async function getBackendPublicUrl(): Promise<string> {
 
   if (!error && data) {
     for (const key of BACKEND_PUBLIC_URL_SETTING_KEYS) {
-      const configuredUrl = normalizeBaseUrl(data.find((item: any) => item.setting_key === key)?.setting_value);
+      const configuredUrl = normalizeBaseUrl(data.find((item) => item.setting_key === key)?.setting_value);
       if (configuredUrl) {
         return configuredUrl;
       }
@@ -97,6 +98,36 @@ export async function createQueuedCallRecord(input: QueuedCallInput): Promise<st
     phone_number_id: input.phoneNumberId ?? null,
     status: 'queued'
   };
+
+  if (input.campaignContactId) {
+    const reuseWindowStart = new Date(Date.now() - QUEUED_REUSE_WINDOW_MS).toISOString();
+    const { data: existingQueued, error: findError } = await supabaseAdmin
+      .from('calls')
+      .select('id')
+      .eq('campaign_contact_id', input.campaignContactId)
+      .is('vapi_call_id', null)
+      .is('started_at', null)
+      .is('metadata_raw', null)
+      .gte('created_at', reuseWindowStart)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (findError) {
+      console.warn('[calls] nao foi possivel buscar registro queued existente:', findError.message);
+    } else if (existingQueued?.id) {
+      const { error: updateError } = await supabaseAdmin
+        .from('calls')
+        .update(payload)
+        .eq('id', existingQueued.id);
+
+      if (updateError) {
+        console.warn('[calls] nao foi possivel reutilizar registro queued existente:', updateError.message);
+      } else {
+        return existingQueued.id;
+      }
+    }
+  }
 
   const { data, error } = await supabaseAdmin.from('calls').insert(payload).select('id').maybeSingle();
   if (error) {
